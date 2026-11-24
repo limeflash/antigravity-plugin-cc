@@ -15,6 +15,10 @@ function Fail([string]$m) { [Console]::Error.WriteLine("FAIL: $m"); exit 1 }
 # - Under ErrorActionPreference=Stop, PS 5.1 turns any stderr line of a
 #   native program into a terminating NativeCommandError, and the launcher
 #   legitimately reports "downloading ..." on stderr: relax it for the call.
+# - -OutputFormat Text: otherwise a child with redirected stderr may write
+#   its error records there as CLIXML, interleaved with the launcher's plain
+#   [Console]::Error lines, and the parent then fails to parse the mix
+#   ("Cannot process the XML from the 'Error' stream").
 function Invoke-Launcher([string[]]$launcherArgs, [switch]$MergeStderr) {
   $quoted = @($launcherArgs | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
   $script = "& '" + ($launcher -replace "'", "''") + "' $quoted; exit `$LASTEXITCODE"
@@ -23,9 +27,9 @@ function Invoke-Launcher([string[]]$launcherArgs, [switch]$MergeStderr) {
   $ErrorActionPreference = 'Continue'
   try {
     if ($MergeStderr) {
-      $o = & powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc 2>&1 | ForEach-Object { "$_" }
+      $o = & powershell -NoProfile -NonInteractive -OutputFormat Text -ExecutionPolicy Bypass -EncodedCommand $enc 2>&1 | ForEach-Object { "$_" }
     } else {
-      $o = & powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc 2>$null
+      $o = & powershell -NoProfile -NonInteractive -OutputFormat Text -ExecutionPolicy Bypass -EncodedCommand $enc 2>$null
     }
     return @{ Out = ($o -join "`n"); Code = $LASTEXITCODE }
   } finally {
