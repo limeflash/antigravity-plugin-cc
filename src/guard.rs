@@ -1337,9 +1337,14 @@ mod tests {
             validate_doc_path("x.pdf.pem", cwd, &home),
             Err("extension '.pem' is not an allowed document type".into())
         );
+        // Windows silently strips a trailing dot from file names ("trail."
+        // is "trail"), so the extension is gone there.
+        let trail = if cfg!(windows) { "(none)" } else { "." };
         assert_eq!(
             validate_doc_path("trail.", cwd, &home),
-            Err("extension '.' is not an allowed document type".into())
+            Err(format!(
+                "extension '{trail}' is not an allowed document type"
+            ))
         );
         assert_eq!(
             validate_doc_path("nope.pdf", cwd, &home),

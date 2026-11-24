@@ -102,6 +102,9 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .cloned()
         .unwrap_or_default();
+    if let Some(p) = env("STUB_PID_OUT") {
+        let _ = std::fs::write(p, std::process::id().to_string());
+    }
     if let Some(ms) = env("STUB_SLEEP_MS").and_then(|v| v.parse::<u64>().ok()) {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }

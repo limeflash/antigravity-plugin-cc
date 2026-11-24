@@ -36,9 +36,32 @@ mod imp {
 
     pub(super) fn alive(pid: u32) -> bool {
         match send(i64::from(pid), 0) {
-            Ok(()) => true,
+            Ok(()) => !is_zombie(pid),
             // The process exists but belongs to someone else.
             Err(e) => e == EPERM,
+        }
+    }
+
+    /// kill(pid, 0) succeeds on a zombie (exited, not yet reaped). An
+    /// orphaned worker is reaped by whatever subreaper adopted it, which on
+    /// CI runners can take a while; it is gone for our purposes. Linux only
+    /// (/proc); elsewhere launchd/init reap promptly.
+    fn is_zombie(pid: u32) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                // "pid (comm) S ..." — comm may contain spaces/parens, so
+                // take the state after the LAST ')'.
+                if let Some(rest) = stat.rsplit_once(')') {
+                    return rest.1.trim_start().starts_with('Z');
+                }
+            }
+            false
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = pid;
+            false
         }
     }
 }

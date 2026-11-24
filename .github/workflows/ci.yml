@@ -52,7 +52,14 @@ jobs:
         run: shellcheck -s sh plugins/agy/bin/agy-plugin scripts/test-launcher.sh
       - name: launcher tests (sh)
         shell: bash
-        run: sh scripts/test-launcher.sh
+        run: |
+          # Windows runs the downloaded .exe through Windows, so the fake
+          # release binary there must be a real executable.
+          if [ "$RUNNER_OS" = Windows ]; then
+            cargo build --locked --example stub_agy
+            export AGY_TEST_FAKE_EXE="$PWD/target/debug/examples/stub_agy.exe"
+          fi
+          sh scripts/test-launcher.sh
       - name: launcher tests (PowerShell 5.1 + 7)
         if: matrix.os == 'windows-latest'
         shell: pwsh

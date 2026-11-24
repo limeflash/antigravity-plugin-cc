@@ -1,6 +1,9 @@
 #!/bin/sh
 # Tests for plugins/agy/bin/agy-plugin (the download-and-verify launcher).
-# Uses a fake release served from file:// and a fake "binary" script.
+# Uses a fake release served from file:// and a fake "binary": a shell
+# script, or — where a script can't stand in for an executable (Windows Git
+# Bash runs the .exe through Windows) — the stub given in AGY_TEST_FAKE_EXE
+# (a built examples/stub_agy), which records its argv.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 work=$(mktemp -d)
@@ -21,7 +24,22 @@ asset="agy-plugin-$arch-$os$exe"
 mkdir -p "$work/plugin/bin" "$work/release/v9.9.9"
 cp "$repo/plugins/agy/bin/agy-plugin" "$work/plugin/bin/"
 echo 9.9.9 >"$work/plugin/bin/VERSION"
-printf '#!/bin/sh\necho "fake-binary args:$*"\n' >"$work/release/v9.9.9/$asset"
+fake="$work/release/v9.9.9/$asset"
+if [ -n "${AGY_TEST_FAKE_EXE:-}" ]; then
+  cp "$AGY_TEST_FAKE_EXE" "$fake"
+  export STUB_RECORD="$work/record.txt" STUB_RESPONSE="fake-binary"
+else
+  printf '#!/bin/sh\necho "fake-binary args:$*"\n' >"$fake"
+fi
+# What the fake printed for "$@": the script echoes its args; the stub
+# prints "fake-binary" and records argv (cwd TAB argv joined by 0x1f).
+ran_with() {
+  if [ -n "${AGY_TEST_FAKE_EXE:-}" ]; then
+    printf 'fake-binary args:%s' "$(tail -n 1 "$STUB_RECORD" | cut -f2 | tr '\037' ' ')"
+  else
+    printf '%s' "$1"
+  fi
+}
 good=$(sha256 "$work/release/v9.9.9/$asset")
 echo "$good  $asset" >"$work/plugin/bin/SHA256SUMS"
 launcher="$work/plugin/bin/agy-plugin"
@@ -29,6 +47,7 @@ export AGY_PLUGIN_DOWNLOAD_BASE="file://$work/release" AGY_PLUGIN_CACHE="$work/c
 
 # 1. First run downloads, verifies, runs and passes args through.
 out=$("$launcher" ask "two words" 2>/dev/null) || fail "first run failed"
+out=$(ran_with "$out")
 [ "$out" = "fake-binary args:ask two words" ] || fail "unexpected output: $out"
 [ -x "$work/cache/9.9.9/$asset" ] || fail "binary not cached"
 echo "ok 1 download + verify + exec"
@@ -40,6 +59,7 @@ echo "ok 2 cached run"
 # 3. A tampered cache entry is NOT executed; the launcher re-downloads.
 printf '#!/bin/sh\necho PWNED\n' >"$work/cache/9.9.9/$asset"
 out=$("$launcher" y 2>/dev/null) || fail "re-download failed"
+out=$(ran_with "$out")
 [ "$out" = "fake-binary args:y" ] || fail "tampered cache was executed: $out"
 echo "ok 3 tampered cache refused"
 

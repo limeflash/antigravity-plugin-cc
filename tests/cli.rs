@@ -522,15 +522,37 @@ fn rescue_rails_dirty_tree_and_isolate() {
     assert!(!Path::new(&cwd).exists(), "worktree removed");
 }
 
+/// Running = exists and is not a zombie (Linux: /proc state; elsewhere
+/// kill -0).
+#[cfg(unix)]
+fn running(pid: u32) -> bool {
+    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        return !stat
+            .rsplit_once(')')
+            .is_some_and(|r| r.1.trim_start().starts_with('Z'));
+    }
+    if cfg!(target_os = "linux") {
+        return false;
+    }
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 #[cfg(unix)]
 #[test]
 fn cancel_stops_a_background_job_and_its_agy() {
     let env = Env::new("cancel");
     let r = repo(&env);
+    let stub_pid_file = env.root.join("stub.pid");
     let o = env.run(
         &r,
         &["rescue", "--background", "slow", "task"],
-        &[("STUB_SLEEP_MS", "60000")],
+        &[
+            ("STUB_SLEEP_MS", "60000"),
+            ("STUB_PID_OUT", stub_pid_file.to_str().unwrap()),
+        ],
     );
     assert!(o.status.success(), "{}", stderr(&o));
     let out = stdout(&o);
@@ -555,14 +577,19 @@ fn cancel_stops_a_background_job_and_its_agy() {
     assert!(stdout(&o).contains("canceled (killed)"));
     let o = env.run(&r, &["status", &id], &[]);
     assert!(stdout(&o).contains("[cancel]"));
-    // The worker's whole group (including the sleeping stub agy) is gone.
-    std::thread::sleep(Duration::from_millis(300));
-    let alive = Command::new("kill")
-        .args(["-0", &format!("-{pid}")])
-        .status()
+    // The worker AND the agy it started are gone (a zombie awaiting its
+    // reaper counts as gone).
+    let agy_pid: u32 = std::fs::read_to_string(env.root.join("stub.pid"))
         .unwrap()
-        .success();
-    assert!(!alive, "worker process group still alive");
+        .trim()
+        .parse()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while (running(pid) || running(agy_pid)) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!running(pid), "worker still running");
+    assert!(!running(agy_pid), "agy still running");
     let o = env.run(&r, &["cancel", &id], &[]);
     assert_eq!(o.status.code(), Some(2));
 }
