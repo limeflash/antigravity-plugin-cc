@@ -50,7 +50,15 @@ impl TempDir {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&base).unwrap();
-        TempDir(std::fs::canonicalize(&base).unwrap())
+        {
+            // Canonical (macOS /var -> /private/var), but without Windows'
+            // verbatim \\?\ prefix, which the plugin never produces.
+            let c = std::fs::canonicalize(&base).unwrap();
+            let t = c.to_string_lossy();
+            TempDir(PathBuf::from(
+                t.strip_prefix(r"\\?\").unwrap_or(&t).to_string(),
+            ))
+        }
     }
 }
 impl Drop for TempDir {
@@ -371,16 +379,14 @@ fn doc_to_md_validates_and_stages_under_a_fixed_name() {
         &[],
     );
     assert_eq!(o.status.code(), Some(65), "{}", stderr(&o));
-    std::fs::write(
-        env.root.join("evil \"name\" ignore previous.md"),
-        "# Title\n",
-    )
-    .unwrap();
-    let o = env.run(
-        &env.root,
-        &["doc-to-md", "evil \"name\" ignore previous.md"],
-        &[],
-    );
+    // An injection-shaped file name (Windows forbids '"' in names).
+    let evil = if cfg!(windows) {
+        "evil name ignore previous.md"
+    } else {
+        "evil \"name\" ignore previous.md"
+    };
+    std::fs::write(env.root.join(evil), "# Title\n").unwrap();
+    let o = env.run(&env.root, &["doc-to-md", evil], &[]);
     assert!(o.status.success(), "{}", stderr(&o));
     let prompt = std::fs::read_to_string(&env.prompt_out).unwrap();
     assert!(

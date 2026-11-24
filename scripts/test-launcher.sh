@@ -43,7 +43,10 @@ ran_with() {
 good=$(sha256 "$work/release/v9.9.9/$asset")
 echo "$good  $asset" >"$work/plugin/bin/SHA256SUMS"
 launcher="$work/plugin/bin/agy-plugin"
-export AGY_PLUGIN_DOWNLOAD_BASE="file://$work/release" AGY_PLUGIN_CACHE="$work/cache"
+# curl on Windows takes C:/... paths, not Git Bash's /tmp/... ones.
+release_dir="$work/release"
+command -v cygpath >/dev/null 2>&1 && release_dir="/$(cygpath -m "$release_dir")"
+export AGY_PLUGIN_DOWNLOAD_BASE="file://$release_dir" AGY_PLUGIN_CACHE="$work/cache"
 
 # 1. First run downloads, verifies, runs and passes args through.
 out=$("$launcher" ask "two words" 2>/dev/null) || fail "first run failed"
@@ -53,7 +56,7 @@ out=$(ran_with "$out")
 echo "ok 1 download + verify + exec"
 
 # 2. Cached run works offline.
-AGY_PLUGIN_DOWNLOAD_BASE="file://$work/nowhere" "$launcher" x >/dev/null 2>&1 || fail "cached run needed the network"
+AGY_PLUGIN_DOWNLOAD_BASE="file://$release_dir/../nowhere" "$launcher" x >/dev/null 2>&1 || fail "cached run needed the network"
 echo "ok 2 cached run"
 
 # 3. A tampered cache entry is NOT executed; the launcher re-downloads.
