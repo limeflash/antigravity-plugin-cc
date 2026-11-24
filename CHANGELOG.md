@@ -35,6 +35,10 @@ fix below landed).
 - Linux: `/agy:cancel` treated an exited-but-not-yet-reaped worker (a
   zombie) as alive and waited out its full grace period before giving up;
   a zombie now counts as gone.
+- Windows: two updates of the same job record at once (a background
+  worker finishing while `/agy:cancel` runs) could fail with "could not
+  lock the job record: Access is denied". Job records are now guarded by
+  an OS file lock instead of a create-and-delete lock file.
 
 ### Tests
 - Windows CI: path, file-name and PowerShell 5.1 quirks in the test
