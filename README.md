@@ -1,247 +1,223 @@
-# agy — the Antigravity CLI plugin for Claude Code
+<div align="center">
+
+# agy for Claude Code
+
+**Use Google's [Antigravity CLI (`agy`)](https://antigravity.google/) without leaving Claude Code.**<br>
+Ask questions, get a second opinion on your diff, hand off tasks, read web pages and documents — safely.
 
 [![CI](https://github.com/limeflash/antigravity-plugin-cc/actions/workflows/ci.yml/badge.svg)](https://github.com/limeflash/antigravity-plugin-cc/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/limeflash/antigravity-plugin-cc?sort=semver&color=blue)](https://github.com/limeflash/antigravity-plugin-cc/releases)
-[![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Linux%20·%20Windows%20·%20WSL-informational)](#requirements)
-[![Rust: std only](https://img.shields.io/badge/rust-std%20only%2C%20zero%20crates-orange)](#how-it-works)
+[![Platforms](https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-informational)](#-requirements)
+[![Rust, zero dependencies](https://img.shields.io/badge/rust-zero%20dependencies-orange)](./CONTRIBUTING.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-**Call Google's [Antigravity CLI (`agy`)](https://antigravity.google/) from inside Claude Code** — ask
-questions, review your diff, delegate tasks, scrape the web, convert
-documents to Markdown — without leaving your editor.
+</div>
 
-What sets it apart: the read-only commands come with a **real read-only
-guarantee** — `agy` runs outside your repository and is pinned to a mode in
-which it *cannot write* — and everything that leaves your machine is guarded
-(credential scan before anything reaches Gemini, SSRF filter on URLs,
-sensitive-path filter on files). One small native binary, **written in Rust
-with the standard library only — zero third-party crates**.
+```text
+> /agy:review --base main
+## Correctness
+- calc.js:1 — `add` returns a - b instead of a + b (HIGH)
+## Edge cases
+- calc.js:2 — `divide` has no guard for b === 0 (MEDIUM)
+```
 
-> **Latest — v0.9.0: rewritten in Rust.** One binary replaces the Bash
-> wrapper, the Node.js companion and the PowerShell port — Node.js is no
-> longer needed. Closes a **read-only escape on agy 1.5.7+** (see
-> [SECURITY.md](./SECURITY.md)), passes `--model` natively, and fixes a dozen
-> job-control bugs. Validated end-to-end against `agy` 1.5.16 on macOS.
+---
 
-## Why this plugin
+## ✨ Why use it
 
-- 🔒 **Read-only means read-only.** `/agy:ask`, `/agy:review`,
-  `/agy:adversarial-review`, `/agy:scrape` and `/agy:doc-to-md` run `agy`
-  from a throwaway directory (your repo is outside its workspace), pinned to
-  agy's **Default agent mode** for that run, without
-  `--dangerously-skip-permissions`, with explicit deny rules for every shell
-  command and file write. Writes are denied and reported. Since
-  agy 1.5.7, headless runs otherwise start in *Auto* mode, which approves
-  writes outside the workspace — we verified agy overwriting a file in an
-  unrelated git repo that way, and pin it shut.
-  ([how it works](#how-it-works) · [SECURITY.md](./SECURITY.md))
-- 🛡️ **Guards what leaves your machine.** Diffs *and the full content of
-  changed files* are scanned for credentials before being sent to Gemini;
-  scrape URLs are SSRF-filtered (localhost, private, link-local, cloud
-  metadata, every numeric/IPv6/`nip.io` spelling of them); document paths
-  are extension-allow-listed and refused under `~/.ssh`, `~/.aws`,
-  `~/.gemini`, `/etc` and friends.
-- 🧰 **13 commands, one plugin.** ask · delegate · research · review ·
-  adversarial-review · rescue · scrape · doc-to-md · image · status · result
-  · cancel · setup.
-- ⚙️ **Background job control.** Long reviews and rescues run detached with
-  real job records (`/agy:status`, `/agy:result`, `/agy:cancel` — cancel
-  stops the worker *and* agy); `rescue --isolate` works in a separate
-  checkout and hands you a reviewable patch.
-- 🎯 **Models that stay current.** `--model flash` / `pro` / `opus` /
-  `sonnet` resolve at call time against `agy models` to the newest model in
-  the family and go to agy's own `--model` flag. No plugin update when
-  Google ships a model; your agy settings are never touched.
-- 📦 **Verified binary.** The launcher downloads the binary for your
-  platform from this repo's GitHub Release once, and checks its SHA-256
-  against the hash committed here on every run.
+| | |
+|---|---|
+| 🔒 **Read-only really means read-only** | Commands like `/agy:ask` and `/agy:review` can look, never touch: agy is explicitly forbidden to change files or run commands, and if that can't be guaranteed the plugin refuses to run. |
+| 🛡️ **Nothing sensitive slips out** | Your diff is checked for API keys before it goes to Gemini; web addresses and file paths are checked so agy can't be pointed at your internal network or your `~/.ssh`. |
+| 🎯 **Always the newest model** | `--model opus`, `pro`, `flash`, `sonnet` pick the latest model of that family that your account offers. |
+| ⏳ **Long jobs in the background** | Start a review or a task, keep working, check back with `/agy:status` and `/agy:result`. |
+| 📦 **Tiny and self-contained** | One ~0.6 MB native program with zero third-party dependencies. No Node.js, no Python. Verified by checksum before it runs. |
 
-## What you get
+---
 
-**Read-only** (agy can read, never change anything):
+## 🚀 Quick start
 
-- **`/agy:ask [--model <alias>] <prompt>`** — one-shot prompt; returns agy's
-  answer verbatim.
-- **`/agy:review [--base <ref>] [--background] [--wait] [--model <alias>] [focus]`**
-  — review the working-tree diff, or the branch since its merge-base with
-  `<ref>`. agy gets the expanded diff (`-U25`) plus the full current content
-  of the changed files, staged on disk.
-- **`/agy:adversarial-review [same flags] [focus]`** — challenge-mode review:
-  questions the design, proposes an alternative, ends with a
-  ship / change / rethink verdict.
-- **`/agy:scrape [--model <alias>] <url>`** — fetch a web page and return its
-  main content as Markdown (SSRF-guarded).
-- **`/agy:doc-to-md [--model <alias>] <path>`** — convert a local document
-  (PDF, DOCX, HTML, …) to Markdown; agy sees one copy of that one file.
-- **`/agy:delegate`, `/agy:research [--background] [--model <alias>]`** — hand
-  an investigation to the `agy:runner` subagent (built on `ask`).
-
-**Write-capable** (agy runs with auto-approval, behind rails):
-
-- **`/agy:rescue [--isolate] [--allow-dirty] [--background] [--wait] [--resume|--fresh] [--model <alias>] <task>`**
-  — let agy edit files. Refuses a dirty git tree (override with
-  `--allow-dirty`) and prints a change summary afterwards; **`--isolate`**
-  works in a separate checkout and saves a patch under
-  `.agy-plugin/patches/` instead, so its edits don't land in your tree (it is
-  not a sandbox — agy still runs with auto-approval).
-- **`/agy:image [--name <slug>] [--output <path>] <description>`** — generate
-  an image with agy's built-in `generate_image` tool.
-
-**Jobs and setup:** `/agy:status [id]`, `/agy:result [id]`,
-`/agy:cancel [id]`, `/agy:setup`, `/agy:help`.
-
-## Requirements
-
-- **Claude Code** with plugin-marketplace support.
-- **Antigravity CLI (`agy`) 1.2.0 or newer**, logged in (OAuth after one
-  interactive `agy` run, or `ANTIGRAVITY_API_KEY`). `/agy:setup` checks all
-  of this and can install agy for you.
-- **git** (for review and rescue) and a POSIX shell — on Windows, the Git
-  Bash that Claude Code already uses. No Node.js, no Python.
-- Platforms with prebuilt binaries: macOS (Apple silicon, Intel), Linux
-  (x86_64, arm64; static musl builds), Windows (x86_64, arm64).
-
-## Install
-
-In Claude Code:
+**1. Install the plugin** (in Claude Code):
 
 ```text
 /plugin marketplace add limeflash/antigravity-plugin-cc
 /plugin install agy@limeflash-antigravity
 /reload-plugins
+```
+
+**2. Check that everything is ready:**
+
+```text
 /agy:setup
 ```
 
-The first `/agy:*` command downloads the plugin's binary for your platform
-(about 0.6 MB) from this repository's GitHub Releases and verifies it. If agy
-is missing, `/agy:setup` offers the official installer:
+It checks that `agy` is installed (and offers to install it), logged in, and new enough.
 
-```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash
-```
-
-## Usage
+**3. Use it:**
 
 ```text
-/agy:ask explain the difference between Go channels and Rust async in one paragraph
-/agy:review
-/agy:review --base main focus on error handling and concurrency safety
-/agy:adversarial-review --background --model opus
-/agy:rescue --isolate fix the off-by-one in pagination
-/agy:scrape https://example.com/changelog
-/agy:doc-to-md ./docs/spec.pdf
-/agy:image --name hero --output ./assets/hero.png isometric illustration of a developer at a desk
+/agy:ask explain Rust lifetimes in one paragraph
 ```
 
-You can also just ask Claude ("ask agy to look at this file and suggest a
-simpler design") — the `agy:runner` subagent picks it up.
+> The first command downloads the plugin's binary for your computer (≈0.6 MB) from this repo's releases and verifies its checksum. After that it runs offline.
 
-### Pick a model
+---
+
+## 🧰 Commands
+
+### Read-only — agy can read, but can't change anything
+
+| Command | What it does |
+|---|---|
+| `/agy:ask <question>` | Ask anything, get agy's answer back. |
+| `/agy:review [focus]` | Review your uncommitted changes. Add `--base main` to review a whole branch. |
+| `/agy:adversarial-review [focus]` | A tougher review: questions the design and ends with *ship / change / rethink*. |
+| `/agy:scrape <url>` | Turn a web page into clean Markdown. |
+| `/agy:doc-to-md <file>` | Turn a PDF, DOCX, HTML, … into Markdown. |
+| `/agy:delegate`, `/agy:research` | Hand an investigation to a subagent that asks agy for you. |
+
+### Can change files — with safety rails
+
+| Command | What it does |
+|---|---|
+| `/agy:rescue <task>` | Let agy fix or build something in your repo. It refuses if you have uncommitted changes and shows you what changed afterwards. Add **`--isolate`** to get a patch instead of edits. |
+| `/agy:image <description>` | Generate an image; `--output path.png` copies it into your project. |
+
+### Background jobs & help
+
+| Command | What it does |
+|---|---|
+| `/agy:status` · `/agy:result` · `/agy:cancel` | Watch, read and stop background jobs. |
+| `/agy:setup` · `/agy:help` | Check your setup · see all commands and the current models. |
+
+**Useful flags:** `--model <name>` on most commands · `--background` (and `--wait`) on `review`, `adversarial-review` and `rescue`.
+
+---
+
+## 🎯 Choosing a model
 
 ```text
-/agy:ask --model opus "explain Go's escape analysis"
+/agy:ask --model opus "what's wrong with this regex?"
 /agy:review --model flash
 ```
 
-Aliases: `flash-low`, `flash-medium`, `flash`, `pro-low`, `pro`, `sonnet`,
-`opus`, `gpt-oss` — each resolves to the newest matching model that
-`agy models` lists for your account. Any id or display name from
-`agy models` works verbatim. `/agy:help` shows the live table. Without
-`--model`, agy uses its own default.
+| Alias | Picks |
+|---|---|
+| `flash`, `flash-medium`, `flash-low` | newest Gemini Flash (High / Medium / Low) |
+| `pro`, `pro-low` | newest Gemini Pro (High / Low) |
+| `opus`, `sonnet` | newest Claude Opus / Sonnet (prefers *Thinking*) |
+| `gpt-oss` | GPT-OSS 120B |
 
-## How it works
+Any exact model name or id from `agy models` works too. `/agy:help` shows what each alias points to right now. Without `--model`, agy uses its own default.
+
+---
+
+## 🔒 How the safety works
+
+**Read-only commands** run agy:
+
+- 📁 **in a throwaway folder** — your repository is never agy's workspace;
+- 🔐 **locked down** — agy is told *Default mode, no shell commands, no file writes*, which also stops it from reading files outside that folder;
+- 🚫 **fail-safe** — if agy can't be locked down (some versions can't), the command refuses to run;
+- 👀 **transparently** — if agy tries something it isn't allowed to, you see a note saying exactly what was blocked.
+
+This matters because since agy **1.5.7**, its default mode lets it edit files in any git repository without asking. Older versions of this plugin (≤ 0.8.1) were affected; see [SECURITY.md](./SECURITY.md).
+
+**Before anything is sent to Gemini:**
+
+| | |
+|---|---|
+| `/agy:review` | Scans the diff *and* the changed files for AWS, GitHub, Slack, OpenAI, Anthropic keys, private keys and `password=` lines. Stops with a warning if it finds any. |
+| `/agy:scrape` | Only `http`/`https`. Blocks localhost, private networks and cloud-metadata addresses, including disguised ones and DNS tricks. The plugin downloads the page itself; agy only reads the copy. |
+| `/agy:doc-to-md` | Only document types (pdf, docx, html, md, …) and never from `~/.ssh`, `~/.aws`, keychains, browser profiles, `/etc`, …. |
+
+**Commands that change files** (`/agy:rescue`, `/agy:image`) do give agy permission to act. Their rails: a clean git tree first, a summary of every change afterwards, and `--isolate` to work on a separate copy.
+
+---
+
+## ⚙️ How it works
 
 ```
-Claude Code → /agy:* → bin/agy-plugin (launcher) → agy-plugin (Rust) → agy --print …
+ Claude Code
+     │  /agy:review
+     ▼
+ bin/agy-plugin ──(first run)──▶ downloads the binary for your OS from GitHub Releases
+     │                            and runs it only if its SHA-256 matches this repo
+     ▼
+ agy-plugin  (Rust, zero dependencies)
+     │  stages the diff · checks for secrets · locks agy down
+     ▼
+ agy  (your install, your login, your settings)
 ```
 
-- **The launcher** (`plugins/agy/bin/agy-plugin`, POSIX sh; a PowerShell
-  twin for Windows without Git Bash) picks the binary for your OS/CPU,
-  downloads it once from the release named in `bin/VERSION`, and refuses to
-  run it unless its SHA-256 matches `bin/SHA256SUMS` — on every run, so a
-  tampered cache is caught too.
-- **The binary** is std-only Rust (no crates at all; OS calls via `extern`),
-  so there is no dependency tree to audit or to be compromised through.
-- **It drives your local agy** — your install, your login, your config
-  (`AGENTS.md`, `GEMINI.md`, `settings.json` are read by agy as usual).
+The plugin never replaces agy: it drives the `agy` you already have, with your account and your `AGENTS.md` / `GEMINI.md`.
 
-**Read-only commands.** agy runs with its cwd *and* only `--add-dir` set to a
-fresh private temp dir (or, for reviews, a stage dir holding the diff and
-copies of the changed files), with repo-location variables removed from its
-environment, under `--sandbox`, and with one session-only setting as the last
-token: `--settings={"agentMode":"","permissions":{"deny":["command(*)","write_file(*)"]}}`.
-That selects agy's Default agent mode — a headless run *denies* anything
-needing approval, including reading outside its workspace — and adds deny
-rules for all shell commands and file writes that agy enforces in any mode.
-agy reports blocked attempts as `denied_actions`, and the plugin shows them. If agy defaults to Auto mode
-but can't be pinned, the plugin refuses to run rather than run unpinned.
-Answers come from agy's `--output-format json`.
+---
 
-**Write-capable commands.** `rescue` and `image` run agy with
-`--dangerously-skip-permissions` by design. `rescue` is guarded by the
-clean-tree check, the post-run change summary and `--isolate`; `image` only
-copies files that are inside agy's own artifact directories.
+## 📋 Requirements
 
-See [SECURITY.md](./SECURITY.md) for the full model and its limits.
+- **Claude Code** with plugin support
+- **Antigravity CLI (`agy`) 1.2.0+**, logged in (run `agy` once, or set `ANTIGRAVITY_API_KEY`). `/agy:setup` can install it.
+- **git** for review and rescue
+- **macOS** (Apple silicon / Intel), **Linux** (x86_64 / arm64), **Windows** (x86_64 / arm64, via the Git Bash Claude Code uses)
 
-## Configuration
+---
+
+<details>
+<summary><b>🔧 Configuration (environment variables)</b></summary>
 
 | Variable | Default | Effect |
 |---|---|---|
-| `AGY_ASK_TIMEOUT`, `AGY_SCRAPE_TIMEOUT`, `AGY_DOCTOMD_TIMEOUT`, `AGY_REVIEW_TIMEOUT`, `AGY_IMAGE_TIMEOUT` | 8m0s, 5m0s, 8m0s, 10m0s, 8m0s | agy `--print-timeout` per command |
-| `AGY_RESCUE_TIMEOUT` | none | `--print-timeout` for rescue |
-| `AGY_REVIEW_CONTEXT` | 25 | `git diff -U<n>` for reviews |
-| `AGY_REVIEW_ALLOW_SECRETS` | unset | `1` sends a diff that matches secret patterns anyway (with a warning) |
-| `AGY_PROMPT_MAX_BYTES` | 30000 | prompt cap (Windows command-line limit) |
-| `AGY_BIN` | PATH lookup | path to agy |
-| `AGY_PLUGIN_BIN` | unset | run a locally built agy-plugin instead of the downloaded one |
-| `AGY_PLUGIN_CACHE` | `~/.cache/agy-plugin` | where the launcher keeps the binary |
+| `AGY_ASK_TIMEOUT` · `AGY_REVIEW_TIMEOUT` · `AGY_SCRAPE_TIMEOUT` · `AGY_DOCTOMD_TIMEOUT` · `AGY_IMAGE_TIMEOUT` | 8m · 10m · 5m · 8m · 8m | how long agy may take |
+| `AGY_RESCUE_TIMEOUT` | none | time limit for rescue |
+| `AGY_REVIEW_CONTEXT` | 25 | lines of context around each change |
+| `AGY_REVIEW_ALLOW_SECRETS` | — | `1` = send even if keys were found (warns) |
+| `AGY_SCRAPE_USE_PROXY` | — | `1` = let scrape use your HTTP proxy |
+| `AGY_BIN` | from `PATH` | path to agy |
+| `AGY_PLUGIN_CACHE` | `~/.cache/agy-plugin` | where the binary is kept |
+| `AGY_PLUGIN_BIN` | — | use a locally built binary (development) |
 
-## FAQ
+</details>
 
-### Do I need an Antigravity subscription?
+<details>
+<summary><b>❓ FAQ</b></summary>
 
-You need whatever account `agy` accepts: Google AI Pro, Ultra, Code Assist
-Standard/Enterprise, or an enterprise GCP project. See the
-[Antigravity docs](https://antigravity.google/docs/cli-overview).
+**Do I need an Antigravity subscription?**
+You need an account `agy` accepts: Google AI Pro / Ultra, Code Assist Standard / Enterprise, or an enterprise GCP project. See the [Antigravity docs](https://antigravity.google/docs/cli-overview).
 
-### Does this plugin send data anywhere other than what agy sends?
+**Does the plugin send my data anywhere?**
+Only through agy, the way agy normally does. The plugin's own single network request is downloading its binary from this repository's releases.
 
-The only network request the plugin itself makes is the one-time download of
-its own binary from this repository's GitHub Releases (verified against the
-committed SHA-256). Everything else goes through agy's normal channels.
+**Will it change my agy settings?**
+No. `--model` is passed per call; your `settings.json` is never edited.
 
-### Can I keep using Antigravity outside this plugin?
+**Why does `rescue` need full permissions?**
+Because it edits files and a background agy can't stop to ask. That's why it insists on a clean git tree, shows the changes, and offers `--isolate`.
 
-Yes — the plugin uses your local install and never changes agy's settings.
+**Can I still use agy normally?**
+Yes. The plugin uses your existing install and leaves it as it is.
 
-### Why does `rescue` need auto-approval?
+</details>
 
-Because it edits files: a headless agy run can't stop to ask. That's why it
-refuses a dirty tree, prints what changed, and offers `--isolate`.
-
-## Development
+<details>
+<summary><b>🛠️ Development</b></summary>
 
 ```bash
-cargo test                         # unit + end-to-end tests (stub agy)
+cargo test                                  # unit + end-to-end tests (against a fake agy)
 cargo clippy --all-targets -- -D warnings
-sh scripts/test-launcher.sh        # launcher download/verify tests
-scripts/e2e-live.sh                # against a real, logged-in agy (uses quota)
-AGY_PLUGIN_BIN=target/release/agy-plugin   # try a local build through the plugin
+sh scripts/test-launcher.sh                 # launcher download & checksum tests
+scripts/e2e-live.sh                         # against a real, logged-in agy (uses quota)
+export AGY_PLUGIN_BIN=$PWD/target/release/agy-plugin   # try your build in Claude Code
 ```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) — including the std-only rule — and
-[RELEASING.md](./RELEASING.md).
+Rules of the house — including *std only, zero crates* — are in [CONTRIBUTING.md](./CONTRIBUTING.md); releases in [RELEASING.md](./RELEASING.md).
 
-## Credits
+</details>
 
-Originally seeded from [@simplybychris](https://github.com/simplybychris)'s
-[`antigravity-plugin-cc`](https://github.com/simplybychris/antigravity-plugin-cc)
-(MIT); the dynamic `--model` resolution follows its 0.5.0. Job-control
-patterns are inspired by
-[`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc)
-(Apache-2.0). No source code is copied from either; see [NOTICE](./NOTICE).
+---
 
-## License
+## 🙏 Credits
 
-[MIT](./LICENSE). See [NOTICE](./NOTICE) for attribution.
+Started from [@simplybychris](https://github.com/simplybychris)'s [`antigravity-plugin-cc`](https://github.com/simplybychris/antigravity-plugin-cc) (MIT); the model aliases follow its 0.5.0. Background-job ideas are inspired by [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc) (Apache-2.0). No code is copied from either; see [NOTICE](./NOTICE).
+
+**License:** [MIT](./LICENSE) · **Changes:** [CHANGELOG.md](./CHANGELOG.md) · **Security:** [SECURITY.md](./SECURITY.md)
