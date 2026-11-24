@@ -103,6 +103,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="${GITHUB_REF_NAME#v}"
+          if [ ! -d plugins/agy/bin ]; then
+            echo "::notice::main has no launcher yet (first Rust release); commit the release's SHA256SUMS to the release PR by hand."
+            exit 0
+          fi
           branch="release/pin-$GITHUB_REF_NAME"
           git switch -c "$branch"
           printf '%s\n' "$v" > plugins/agy/bin/VERSION
