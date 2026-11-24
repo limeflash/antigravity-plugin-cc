@@ -5,7 +5,9 @@ allowed-tools: Agent
 ---
 
 Hand the user's task to the `agy:runner` subagent
-(`subagent_type: "agy:runner"`).
+(`subagent_type: "agy:runner"`). The runner uses the read-only `ask`
+command, so agy can read and answer but not edit files — for a task where
+agy should change code, use `/agy:rescue` instead.
 
 Raw user request:
 $ARGUMENTS
@@ -16,15 +18,14 @@ $ARGUMENTS
   `run_in_background: true`. Strip the flag from the forwarded task text.
 - Otherwise run the subagent in the foreground.
 - If the request contains `--model <alias>`, forward it to the subagent so
-  it can be appended to the wrapper call as `--model <alias>` (placed
-  **before** the prompt argument). Strip it from the task text.
-- If no model is given, the wrapper uses whatever the TUI is currently set
-  to (stored in `~/.gemini/antigravity-cli/settings.json`).
+  it can pass `--model <alias>` **before** the prompt argument. Strip it
+  from the task text.
+- If no model is given, agy uses whatever model it is currently set to.
 
-Aliases for `<alias>`: `flash-low`, `flash-medium`, `flash`, `pro-low`,
-`pro`, `sonnet`, `opus`, `gpt-oss`. Canonical TUI strings (e.g.
-`"Claude Opus 4.6 (Thinking)"`) are also accepted. Run `/agy:help` for the
-full table.
+`<alias>`: `flash-low`, `flash-medium`, `flash`, `pro-low`, `pro`, `sonnet`,
+`opus`, `gpt-oss` — each resolves to the newest model of that family that
+`agy models` lists. Any id or display name from `agy models` is also
+accepted. Run `/agy:help` for the table.
 
 ## Response style
 

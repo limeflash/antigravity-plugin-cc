@@ -10,14 +10,12 @@ This project was originally seeded from:
   https://github.com/simplybychris/antigravity-plugin-cc
   Licensed under the MIT License.
 
-Thank you to @simplybychris for the starting point. The project has since
-been substantially rewritten and extended — a real read-only guarantee, the
-agy issue-#76 transcript capture, a Node.js job-control companion,
-/agy:scrape and /agy:doc-to-md with SSRF/path guards, a native PowerShell
-entry, cross-platform validation, and a 245-test suite are all original to
-it (see CHANGELOG.md). It is maintained independently by @limeflash. The
-MIT attribution above is retained because portions of the initial scaffold
-trace back to that base.
+Thank you to @simplybychris for the starting point. The dynamic `--model`
+alias resolution (resolve against `agy models`, pass agy's own --model)
+follows that project's 0.5.0 design. Since 0.9.0 this project is a
+from-scratch, std-only Rust implementation maintained independently by
+@limeflash; the MIT attribution above is retained because the slash-command
+surface and parts of the documentation trace back to that base.
 
 Job-control, state-persistence, and render-layer concepts are inspired by:
 
@@ -25,6 +23,5 @@ Job-control, state-persistence, and render-layer concepts are inspired by:
   https://github.com/openai/codex-plugin-cc
   Licensed under the Apache License, Version 2.0.
 
-No source code is copied directly from codex-plugin-cc; the patterns are
-re-implemented for `agy`. Any future file-level port would carry the
-upstream attribution header and the Apache-2.0 NOTICE as required.
+No source code is copied from either project. The binary has no third-party
+dependencies.

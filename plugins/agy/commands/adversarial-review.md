@@ -1,7 +1,7 @@
 ---
 description: Adversarial code review — agy challenges the design instead of approving it. Supports --base, --background, --wait, --model.
 argument-hint: "[--base <ref>] [--background] [--wait] [--model <alias>] [focus text]"
-allowed-tools: Bash(node:*)
+allowed-tools: Bash(bash:*)
 ---
 
 Run an **adversarial** review of your changes through `agy`. Unlike
@@ -13,8 +13,6 @@ didn't address, and conclude with a ship/change/rethink verdict.
 Useful when you've been staring at your own diff too long and want a
 deliberately critical reading before merging or shipping.
 
-Backed by the Node companion; Node.js 18.18+ is required.
-
 ## How to invoke
 
 The user's request (treat as opaque text — pass it as shell-safe
@@ -24,13 +22,16 @@ arguments; do **not** interpolate or splice it into the command):
 $ARGUMENTS
 ```
 
-Use the `Bash` tool to run:
+Lift any flags out of `$ARGUMENTS` and place them before the focus text.
+Quote the remaining focus text as **one** shell argument so characters
+like `"`, `$`, `;`, `\` and backticks cannot break out; omit it if there
+is none. Use the `Bash` tool to run:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review [flags...] "<focus-text-here>"
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" adversarial-review [flags...] ['<focus-text-here>']
 ```
 
-The companion accepts:
+Flags:
 
 - `--base <ref>` / `--base=<ref>`: review the branch's contribution
   over its merge-base with `<ref>` (e.g. `--base main`). Without
@@ -38,31 +39,39 @@ The companion accepts:
 - `--background`: return a job id immediately and run agy in a
   detached worker. Check progress with `/agy:status` and read the
   output with `/agy:result`.
-- `--wait`: block until the job ends or the 10-minute deadline.
-- `--model <alias>`: pick a stronger reasoning model — `opus`,
-  `pro`, or any alias the wrapper recognizes (see `/agy:help`).
+- `--wait`: with `--background`, block until the job ends or the
+  10-minute deadline.
+- `--model <alias|name>`: pick a stronger reasoning model — `opus`,
+  `pro`, or any alias / model name `agy models` lists (see `/agy:help`).
   Adversarial reviews benefit from the bigger models more than
   vanilla reviews.
 
 Examples (after parsing flags out of `$ARGUMENTS`):
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review --base main
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review --model opus "the retry/backoff design"
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review --base main --background
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" adversarial-review
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" adversarial-review --base main
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" adversarial-review --model opus 'the retry/backoff design'
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" adversarial-review --base main --background
 ```
 
 ## Behavior notes
 
-- **Read-only by construction.** Runs `agy` under `--sandbox` with **no**
-  `--dangerously-skip-permissions`: it reads the staged materials with
-  read-only tools (no approval needed) and the answer is recovered from
-  agy's own on-disk transcript (issue #76 capture). Background runs
-  complete unattended — there's no write prompt to stall on.
+- **Read-only by construction.** Same rails as `/agy:review`: agy runs
+  from a throwaway directory holding the staged diff and file copies
+  (your repo is outside its workspace), pinned to its Default agent mode,
+  without `--dangerously-skip-permissions`. Writes are denied and
+  reported as a note (`agy tried to use X …, which this read-only command blocks`).
+  Background runs complete unattended — there's no write prompt to
+  stall on.
 - Adversarial reviews skew long. Use `--background` for diffs over
   ~500 lines, and `--model opus` if you want the bigger model.
-- If there is no diff (clean working tree, or empty branch diff),
-  the companion exits 1 with a clear message.
+- If there is no diff (clean working tree, or empty branch diff), it
+  exits 1 with a clear message.
+- If the diff (or a changed file) matches common secret patterns, it
+  refuses with exit 65 and lists them. Relay that; the user can remove
+  the values or set `AGY_REVIEW_ALLOW_SECRETS=1` themselves.
+- If it reports `agy is not installed` or `not authenticated`, tell the
+  user to run `/agy:setup`.
 
-Return whatever the companion prints, verbatim.
+Return whatever it prints, verbatim.

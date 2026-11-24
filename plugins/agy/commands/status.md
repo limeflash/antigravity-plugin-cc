@@ -1,11 +1,13 @@
 ---
-description: Show the recent /agy:rescue jobs in this workspace, or a single job's details.
-argument-hint: "[task-id|prefix]"
-allowed-tools: Bash(node:*)
+description: Show the recent agy jobs (/agy:rescue, /agy:review) in this workspace, or a single job's details.
+argument-hint: "[job-id|prefix]"
+allowed-tools: Bash(bash:*)
 ---
 
 List recent agy jobs (no argument) or show the detail block for a
-single job (when an id or prefix is provided).
+single job (when an id or prefix is provided). Jobs come from
+`/agy:rescue`, `/agy:review` and `/agy:adversarial-review`, foreground
+or background.
 
 ## How to invoke
 
@@ -18,27 +20,24 @@ $ARGUMENTS
 If `$ARGUMENTS` is empty, run:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" status
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" status
 ```
 
 If `$ARGUMENTS` contains a job id (full `agy-xxxxxxxx`) or a unique
-prefix (`agy-3a7b`), pass it through as the first positional
-argument:
+prefix (`agy-3a7b`), pass it as one quoted argument:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" status "<id-or-prefix>"
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" status '<id-or-prefix>'
 ```
 
 ## Behavior notes
 
-- Jobs are stored per repository under `<repo>/.agy-plugin/jobs/`.
-  Running `/agy:status` from outside the repo where you started a
-  job will not show it — that's intentional.
-- The companion treats `running` records whose PID is dead as
-  `failed` in the rendered output (without rewriting the record).
-  If you see a downgrade note in the detail block, the worker
-  process is gone but the on-disk record didn't get the update.
-- Ambiguous prefixes exit 2 and list candidates so the user can
-  pick a longer prefix.
+- Jobs are stored per workspace under `<repo>/.agy-plugin/jobs/`, and the
+  list shows the 10 most recent. Running `/agy:status` from another
+  project will not show them — that's intentional.
+- A `running` record whose worker PID is dead is shown as `failed`
+  (without rewriting the record), with a note in the detail block.
+- An unknown id exits 2; an ambiguous prefix exits 2 and lists the
+  candidates so the user can pick a longer prefix.
 
-Return the companion's stdout verbatim.
+Return its stdout verbatim.

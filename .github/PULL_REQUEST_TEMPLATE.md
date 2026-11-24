@@ -20,7 +20,8 @@ Drop sections that aren't relevant; don't pad.
 ## How was this tested?
 
 <!--
-- Unit tests added/updated under `tests/`?
+- Unit tests in the module, or an end-to-end case in `tests/cli.rs`?
+- `scripts/e2e-live.sh` against a real agy (if agy invocation changed)?
 - End-to-end run inside Claude Code? (Paste the slash-command output if
   it's not too long.)
 - Any platform you couldn't test on?
@@ -28,18 +29,17 @@ Drop sections that aren't relevant; don't pad.
 
 ## Compatibility
 
-- [ ] Works on macOS `/bin/bash` 3.2 (or N/A — Node-only code).
-- [ ] No new runtime dependencies (or the README + CHANGELOG explain
-      why one was added).
+- [ ] No crate dependencies (std only — CONTRIBUTING.md).
+- [ ] Platform code checked on macOS, Linux and Windows (or with
+      `cargo clippy --target …`).
 - [ ] `agy` CLI behavior assumed: <!-- pin a version if relying on
       specific flags -->
 
 ## Checklist
 
-- [ ] CI is green (shellcheck + bats + Node tests).
+- [ ] CI is green (fmt, clippy, tests on 3 OSes, launcher tests).
 - [ ] `CHANGELOG.md` entry under the unreleased section.
-- [ ] No `--dangerously-skip-permissions` added (or explicit
-      justification in the description).
+- [ ] Read-only commands still pin Default mode and never auto-approve.
 - [ ] No new secret-scan false negatives introduced.
 
 ## Related issues
