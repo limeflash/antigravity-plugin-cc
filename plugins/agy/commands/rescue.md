@@ -60,8 +60,9 @@ bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" rescue --background --wait 'fix the 
 bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" rescue --model opus --print-timeout 20m 'migrate the tests to vitest'
 ```
 
-`<alias>`: `flash-low`, `flash-medium`, `flash`, `pro-low`, `pro`,
-`sonnet`, `opus`, `gpt-oss` — resolved to the newest model of that
+`<alias>`: `gemini` (newest Gemini of any kind), any Gemini kind
+`agy models` lists (`hydrogen`, `flash`, `pro`, …) with an optional level
+(`hydrogen-xhigh`, `flash-low`), `opus`, `sonnet`, `gpt-oss` — resolved to the newest model of that
 family that `agy models` lists and passed to agy's `--model` for this
 run only. Any id or display name from `agy models` is also accepted.
 

@@ -44,10 +44,15 @@ forwarding.
 
 ## Model aliases
 
-`flash-low`, `flash-medium` (`flash-med`), `flash` (`flash-high`),
-`pro-low`, `pro` (`pro-high`), `sonnet` (`claude-sonnet`),
-`opus` (`claude-opus`), `gpt-oss` (`gpt-oss-120b`). Each resolves against
-`agy models` to the newest model in its family. Any id or display name that
+- `gemini` — the newest Gemini of any kind (Gemini 4 Hydrogen today).
+- Any Gemini kind that `agy models` lists — `hydrogen`, `flash`, `pro`, and
+  whatever code name Google adds next — is an alias by itself.
+- Add a level to either: `-xhigh`, `-high` (the default), `-medium`
+  (`-med`), `-low` — e.g. `hydrogen-xhigh`, `flash-low`, `gemini-medium`.
+- `opus` (`claude-opus`), `sonnet` (`claude-sonnet`), `gpt-oss`
+  (`gpt-oss-120b`).
+
+Each resolves against `agy models` to the newest model in its family. Any id or display name that
 `agy models` lists is also accepted verbatim.
 
 Run `bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" help` for the

@@ -29,7 +29,7 @@ Ask questions, get a second opinion on your diff, hand off tasks, read web pages
 |---|---|
 | 🔒 **Read-only really means read-only** | Commands like `/agy:ask` and `/agy:review` can look, never touch: agy is explicitly forbidden to change files or run commands, and if that can't be guaranteed the plugin refuses to run. |
 | 🛡️ **Nothing sensitive slips out** | Your diff is checked for API keys before it goes to Gemini; web addresses and file paths are checked so agy can't be pointed at your internal network or your `~/.ssh`. |
-| 🎯 **Always the newest model** | `--model opus`, `pro`, `flash`, `sonnet` pick the latest model of that family that your account offers. |
+| 🎯 **Always the newest model** | `--model gemini` picks the newest Gemini (Gemini 4 Hydrogen today); `hydrogen-xhigh`, `flash`, `opus`, `sonnet` pick the latest of that family your account offers. |
 | ⏳ **Long jobs in the background** | Start a review or a task, keep working, check back with `/agy:status` and `/agy:result`. |
 | 📦 **Tiny and self-contained** | One ~0.6 MB native program with zero third-party dependencies. No Node.js, no Python. Verified by checksum before it runs. |
 
@@ -97,18 +97,23 @@ It checks that `agy` is installed (and offers to install it), logged in, and new
 ## 🎯 Choosing a model
 
 ```text
-/agy:ask --model opus "what's wrong with this regex?"
-/agy:review --model flash
+/agy:review --model gemini
+/agy:ask --model hydrogen-xhigh "what's wrong with this regex?"
+/agy:review --model flash-low
 ```
 
-| Alias | Picks |
-|---|---|
-| `flash`, `flash-medium`, `flash-low` | newest Gemini Flash (High / Medium / Low) |
-| `pro`, `pro-low` | newest Gemini Pro (High / Low) |
-| `opus`, `sonnet` | newest Claude Opus / Sonnet (prefers *Thinking*) |
-| `gpt-oss` | GPT-OSS 120B |
+| Alias | Picks | Today¹ |
+|---|---|---|
+| `gemini` | newest Gemini of any kind | Gemini 4 Hydrogen (High) |
+| `hydrogen` | newest Gemini Hydrogen | Gemini 4 Hydrogen (High) |
+| `flash` | newest Gemini Flash | Gemini 3.8 Flash (High) |
+| `pro`, `carbon`, … | **any** Gemini kind your account lists | — |
+| `opus`, `sonnet` | newest Claude Opus / Sonnet (prefers *Thinking*) | Claude Opus 4.6 / Sonnet 4.6 |
+| `gpt-oss` | GPT-OSS 120B | GPT-OSS 120B (Medium) |
 
-Any exact model name or id from `agy models` works too. `/agy:help` shows what each alias points to right now. Without `--model`, agy uses its own default.
+**Levels:** add `-xhigh`, `-high` (default), `-medium` or `-low` to any Gemini alias — `hydrogen-xhigh`, `flash-low`, `gemini-medium`. When Google ships a new Gemini code name, its alias works right away, no plugin update.
+
+¹ What `agy models` listed on 2026-11-25; your account may differ. Any exact model name or id from `agy models` works too. `/agy:help` shows what each alias points to right now. Without `--model`, agy uses its own default.
 
 ---
 

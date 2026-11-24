@@ -42,8 +42,9 @@ Then invoke the `agy:runner` subagent with that prompt as
   is given, agy uses whatever model it is currently set to (a
   reasoning-strong model like `pro` or `opus` works well for research).
 
-`<alias>`: `flash-low`, `flash-medium`, `flash`, `pro-low`, `pro`, `sonnet`,
-`opus`, `gpt-oss` — each resolves to the newest model of that family that
+`<alias>`: `gemini` (newest Gemini of any kind), any Gemini kind
+`agy models` lists (`hydrogen`, `flash`, `pro`, …) with an optional level
+(`hydrogen-xhigh`, `flash-low`), `opus`, `sonnet`, `gpt-oss` — each resolves to the newest model of that family that
 `agy models` lists. Any id or display name from `agy models` is also
 accepted. Run `/agy:help` for the table.
 
