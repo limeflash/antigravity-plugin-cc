@@ -1,83 +1,76 @@
 # Contributing
 
-Thanks for considering a contribution! This plugin's design goals (in
-priority order):
+Thanks for considering a contribution! Design goals, in priority order:
 
-1. **Safe by default** — no `--dangerously-skip-permissions`, no global
-   `--add-dir <CWD>`, no auto-approve of `agy` tool calls.
-2. **No runtime dependency creep** — Bash + git are required; Node.js
-   18+ is required only for the job-control commands (Phase 2).
-3. **Cross-platform** — macOS, Linux, WSL today; Windows-native
-   PowerShell port is roadmapped.
+1. **Safe by default.** Read-only commands stay read-only (Default agent
+   mode pinned, no `--dangerously-skip-permissions`, never the repo as agy's
+   workspace), and anything that leaves the machine is guarded.
+2. **std-only Rust.** `[dependencies]` stays empty — no crates in any form,
+   no vendored third-party code, no `build.rs`. If std doesn't wrap an OS
+   call, declare it with `extern` in `src/sys.rs`. CI fails on any
+   dependency. This keeps the binary small and the supply chain auditable.
+3. **Cross-platform, equally.** macOS, Linux and Windows (Git Bash and
+   native PowerShell). Use `std::path`, gate platform code with `cfg`, and
+   check `cargo clippy --target x86_64-pc-windows-msvc` when you touch it.
 4. **Useful to the typical Claude Code user calling `agy`.**
 
-## Quick start for development
+## Development
 
-1. Fork and clone:
-   ```bash
-   git clone git@github.com:<your-handle>/antigravity-plugin-cc.git
-   cd antigravity-plugin-cc
-   git remote add upstream https://github.com/limeflash/antigravity-plugin-cc.git
-   ```
-2. Edit files under `plugins/agy/`.
-3. Test locally:
-   - Bash: `bats tests/` (install `bats-core` via `apt`/`brew`/`npm`).
-   - Node (Phase 2+): `npm install && npm test`.
-   - End-to-end: point your Claude Code marketplace at your clone, or
-     symlink `plugins/agy/` into
-     `~/.claude/plugins/marketplaces/local/plugins/`.
-4. Run `/agy:setup` to confirm nothing broke.
-5. Open a PR. CI must be green; new behavior should land with a test.
+```bash
+git clone git@github.com:<you>/antigravity-plugin-cc.git && cd antigravity-plugin-cc
+cargo test                                  # unit + end-to-end tests against a stub agy
+cargo clippy --all-targets -- -D warnings
+cargo fmt
+sh scripts/test-launcher.sh                 # launcher download/verify tests
+```
+
+The end-to-end tests in `tests/cli.rs` run the real binary against
+`examples/stub_agy.rs`, which records how it was called; add a case there
+for any change to how agy is invoked. `scripts/e2e-live.sh` runs the
+commands against a real, logged-in agy (it uses model quota) — including the
+read-only write-escape check; run it before a release.
+
+To use your build from Claude Code, point the plugin at it:
+`export AGY_PLUGIN_BIN=$PWD/target/release/agy-plugin`, then add your clone
+as a local marketplace.
+
+## Layout
+
+- `src/` — the binary: `commands.rs` (the /agy:* commands), `capture.rs`
+  (the read-only agy run), `agy.rs` / `models.rs` (probing agy, `--model`),
+  `guard.rs` / `secrets.rs` / `fetch.rs` (input guards), `git.rs`,
+  `jobs.rs` (job state and workers), `sys.rs` (OS calls), `json.rs`,
+  `cli.rs`, `render.rs`, `prompts.rs`, `time.rs`, `util.rs`.
+- `plugins/agy/` — what Claude Code installs: slash commands, the runner
+  subagent, the skill, and `bin/` (launcher, `VERSION`, `SHA256SUMS`).
 
 ## What this project wants help with
 
-- **Better secret patterns** for the secret scanner (more true positives, no
-  new false positives — bring sample diffs in the PR).
-- **`/agy:doc-to-md` for binary formats** (PDF / DOCX / PPTX) via a safe local
-  text-extraction step.
-- **PowerShell parity** — extend `agy-run.ps1` to more commands, and add
-  Pester tests.
-- **`shfmt -d -i 2 -ci` clean format pass** on `agy-run.sh` (currently
-  informational in CI; making it blocking is the goal).
-- **Real-world dogfooding reports** — bugs you hit running the commands on
-  your own projects. Running `/agy:review` / `/agy:adversarial-review` on the
-  plugin's own diffs is how most bugs get found.
+- Better secret patterns (more true positives, no new false positives —
+  bring sample diffs).
+- `/agy:doc-to-md` for binary formats via a safe local extraction step.
+- Real-world reports from running the commands on your own projects.
 
 ## What this project will say no to
 
-- A Node.js runtime for the slash commands that don't need state
-  (`/agy:ask`, `/agy:image`, `/agy:review`, `/agy:setup`, `/agy:help`).
-  Those stay in Bash.
-- Removing the secret-scan guardrail by default. The opt-in via
-  `AGY_REVIEW_ALLOW_SECRETS=1` exists precisely so default behavior
-  stays safe.
-- Adding `--dangerously-skip-permissions` to any command. If a use case
-  needs it, propose it in an issue first — the answer will almost
-  certainly be "use `agy` directly".
-- Hard dependencies on Windows-only or Unix-only tooling.
+- Any crate dependency.
+- Weakening a guard by default (the secret scan's opt-out is
+  `AGY_REVIEW_ALLOW_SECRETS=1` for a reason).
+- Auto-approval (`--dangerously-skip-permissions`) on anything but rescue and
+  image.
 
 ## Filing issues
 
-Use the issue templates. For bugs, include:
-- output of `/agy:setup`
-- the exact command you ran
-- `agy --version` and `bash --version`
-- OS and shell
-
-For security issues, **do not file a public issue** —
-see [SECURITY.md](./SECURITY.md).
+Use the issue templates. For bugs include the output of `/agy:setup`, the
+exact command, `agy --version`, and your OS. Security issues: see
+[SECURITY.md](./SECURITY.md), never a public issue.
 
 ## Commit style
 
-- Conventional commits encouraged (`feat:`, `fix:`, `chore:`, `ci:`,
-  `docs:`, `test:`).
-- Squash-merge is the default. Long PRs are fine if the per-commit
-  history is clean; you'll be asked to rebase if not.
+Conventional commits (`feat:`, `fix:`, `chore:`, `ci:`, `docs:`, `test:`).
+Squash-merge by default.
 
 ## License
 
-By contributing, you agree your contributions are licensed under the
-[MIT License](LICENSE), matching the rest of the repository. If your
-contribution ports code from `openai/codex-plugin-cc` (Apache 2.0),
-include the upstream copyright header in the touched file and link the
-specific commit you took it from.
+By contributing you agree your contributions are licensed under the
+[MIT License](LICENSE).

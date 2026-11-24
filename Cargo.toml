@@ -1,0 +1,23 @@
+[package]
+name = "agy-plugin"
+version = "0.9.0"
+edition = "2024"
+description = "Claude Code plugin runtime for Google's Antigravity CLI (agy): read-only commands that stay read-only, plus background jobs."
+license = "MIT"
+repository = "https://github.com/limeflash/antigravity-plugin-cc"
+publish = false
+
+# Policy: std only. No crates in any form (see CONTRIBUTING.md). OS calls
+# that std does not wrap go through `extern` declarations in src/sys.rs.
+[dependencies]
+
+[[bin]]
+name = "agy-plugin"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

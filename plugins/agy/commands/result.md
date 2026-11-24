@@ -1,11 +1,12 @@
 ---
-description: Print the captured output of a /agy:rescue job (latest by default).
-argument-hint: "[task-id|prefix]"
-allowed-tools: Bash(node:*)
+description: Print the captured output of an /agy:rescue or /agy:review job (latest by default).
+argument-hint: "[job-id|prefix]"
+allowed-tools: Bash(bash:*)
 ---
 
-Fetch the captured stdout/stderr of an agy job. Defaults to the
-most recent job in this workspace.
+Fetch the captured output of an agy job (`/agy:rescue`, `/agy:review`,
+`/agy:adversarial-review`). Defaults to the most recent job in this
+workspace.
 
 ## How to invoke
 
@@ -16,24 +17,23 @@ $ARGUMENTS
 If empty:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" result
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" result
 ```
 
-If the user passed an id or prefix:
+If the user passed an id or prefix (quote it as one shell argument):
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" result "<id-or-prefix>"
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" result '<id-or-prefix>'
 ```
 
 ## Behavior notes
 
-- The companion prints the job's detail header first, then a
+- It prints the job's detail header first (status, exit code, …), then a
   `--- output ---` separator, then the contents of the log file at
   `<repo>/.agy-plugin/logs/<id>.log`.
 - For a job that's still running, the log is whatever the worker
   has flushed so far. There's no guarantee it ends on a clean line.
-- For a job that exited, the trailing line shows the final status
-  and exit code so the user can see at a glance whether agy
-  succeeded.
+- An unknown or ambiguous id exits 2 (ambiguous prefixes list the
+  candidates).
 
-Return the companion's stdout verbatim.
+Return its stdout verbatim.

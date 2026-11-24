@@ -1,11 +1,12 @@
 ---
-description: Cancel a running /agy:rescue job (SIGTERM, then SIGKILL after a grace).
-argument-hint: "[task-id|prefix]"
-allowed-tools: Bash(node:*)
+description: Cancel a running background /agy:rescue or /agy:review job (stops the worker and agy itself).
+argument-hint: "[job-id|prefix]"
+allowed-tools: Bash(bash:*)
 ---
 
-Stop an active background job started by `/agy:rescue --background`.
-Defaults to the latest cancelable job in this workspace.
+Stop an active background job started by `/agy:rescue --background`,
+`/agy:review --background` or `/agy:adversarial-review --background`.
+Defaults to the latest job in this workspace.
 
 ## How to invoke
 
@@ -16,23 +17,31 @@ $ARGUMENTS
 If empty:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" cancel
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" cancel
 ```
 
-If the user passed an id or prefix:
+If the user passed an id or prefix (quote it as one shell argument):
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" cancel "<id-or-prefix>"
+bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" cancel '<id-or-prefix>'
 ```
 
 ## Behavior notes
 
-- The companion sends `SIGTERM` first, waits up to 5 seconds, then
-  escalates to `SIGKILL` if the process hasn't exited. On Windows,
-  this is whatever the OS provides for those signals.
-- A job whose record claims `running` but whose PID is already dead
-  is marked `canceled` without sending any signal.
-- A completed/failed/already-canceled job exits 2 with a message
-  saying nothing was done — there's nothing to cancel.
+- Cancel stops the worker's whole process group — the worker **and** the
+  `agy` process it started: `SIGTERM` first, then `SIGKILL` after a
+  5-second grace. On Windows it uses `taskkill /T` on the process tree.
+- Only jobs you started on this machine can be stopped: cancel finds the
+  worker through a private per-user registry and signals it only while the
+  worker provably holds its lock. A job whose worker is already gone is
+  marked `canceled` without sending any signal; a record that came with
+  the repository (`not-started-here`) is marked canceled and nothing is
+  stopped or deleted.
+- With no id, it cancels the newest job that is still running or pending.
+- A completed/failed/already-canceled job exits 2 saying it is already
+  finished — there's nothing to cancel. An unknown or ambiguous id also
+  exits 2.
+- A canceled `/agy:rescue` may have edited files already; suggest
+  `git status` / `git diff` to see what it left behind.
 
-Return the companion's stdout verbatim.
+Return its stdout verbatim.

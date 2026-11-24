@@ -1,0 +1,6 @@
+eb594234b3b14a6365fcc11aad7d3d98bb5b2a0d2a6eed432d4ba81e49659d0f  agy-plugin-aarch64-apple-darwin
+b212310aa4c7cd8e0785a6a3fa10f015014523e893ae41f9f2290a593e1e51a7  agy-plugin-aarch64-pc-windows-msvc.exe
+d785ae0894ed5f744e5294a63d2beb3926203389ec01c89a8356e416cb5c6c96  agy-plugin-aarch64-unknown-linux-musl
+e6b4dae85ed1916c108a27c6fda2ae92ca3c5d39d3f66dbead2a1ad7359ad2c4  agy-plugin-x86_64-apple-darwin
+1e7e19fee8830c70a41c28c049d9e2998d57f98b7641b7b4cf0819f37dbb0a03  agy-plugin-x86_64-pc-windows-msvc.exe
+2493be98620e8cedf8fbb532e4a927ec431fcde3fd58afaf1c6647401eca2f07  agy-plugin-x86_64-unknown-linux-musl

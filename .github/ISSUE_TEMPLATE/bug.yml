@@ -41,10 +41,10 @@ body:
       required: true
 
   - type: input
-    id: bash-version
+    id: plugin-version
     attributes:
-      label: "`bash --version` (first line)"
-      placeholder: "GNU bash, version 5.2.x..."
+      label: "Plugin version (`/agy:setup` → pluginVersion)"
+      placeholder: "0.9.0"
     validations:
       required: true
 
@@ -56,7 +56,7 @@ body:
         - macOS
         - Linux
         - WSL (on Windows)
-        - Windows (native PowerShell — not yet supported)
+        - Windows (native PowerShell)
         - Other
     validations:
       required: true

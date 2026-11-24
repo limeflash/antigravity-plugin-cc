@@ -38,14 +38,14 @@ Then invoke the `agy:runner` subagent with that prompt as
   `run_in_background: true`. Research is often long-running — prefer
   background unless the user explicitly asked for foreground.
 - If the request contains `--model <alias>`, forward it to the subagent so
-  it can be appended to the wrapper call as `--model <alias>` (placed
-  **before** the prompt argument). If no model is given, leave the choice to
-  whatever the TUI is currently set to (a reasoning-strong model like
-  `pro` or `opus` works well for research).
+  it can pass `--model <alias>` **before** the prompt argument. If no model
+  is given, agy uses whatever model it is currently set to (a
+  reasoning-strong model like `pro` or `opus` works well for research).
 
-Aliases: `flash-low`, `flash-medium`, `flash`, `pro-low`, `pro`, `sonnet`,
-`opus`, `gpt-oss`. Canonical TUI strings (e.g. `"Claude Opus 4.6 (Thinking)"`)
-are also accepted. Run `/agy:help` for the full table.
+`<alias>`: `flash-low`, `flash-medium`, `flash`, `pro-low`, `pro`, `sonnet`,
+`opus`, `gpt-oss` — each resolves to the newest model of that family that
+`agy models` lists. Any id or display name from `agy models` is also
+accepted. Run `/agy:help` for the table.
 
 ## Response style
 

@@ -12,6 +12,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > since been substantially rewritten and extended. The earlier entries below
 > are the original upstream history, preserved for traceability.
 
+## [0.9.0] - 2026-11-24 (limeflash)
+
+**Rewritten in Rust, and a read-only escape on agy 1.5.7+ closed.** One
+std-only binary (zero third-party crates) replaces the Bash wrapper, the
+Node.js companion and the PowerShell port. Node.js is no longer required.
+The binary is downloaded once from GitHub Releases by a small launcher and
+verified against the SHA-256 committed in `plugins/agy/bin/SHA256SUMS`.
+
+### Security
+- **Read-only commands could write on agy 1.5.7+.** agy 1.5.7 made Auto the
+  default agent mode for headless runs, and Auto approves writes outside the
+  workspace (any file in a git/jj/hg repo, any create or append elsewhere).
+  Reproduced on agy 1.5.16: 0.8.1's `/agy:ask` overwrote a file in an
+  unrelated git repo. Every read-only run is now pinned with one last-place
+  token, `--settings={"agentMode":"","permissions":{"deny":["command(*)","write_file(*)"]}}`:
+  Default mode (which also denies reads outside the workspace) plus explicit
+  deny rules that agy enforces even in Auto mode and that beat saved allow
+  rules. Denied actions are reported; an agy that defaults to Auto but can't
+  be pinned is refused (fail closed). See SECURITY.md.
+- Extra agy flags on read-only commands are limited to `--print-timeout` and
+  `--effort`, each with a real value (`--mode`, `--settings`, `--add-dir`,
+  `--dangerously-skip-permissions`, … are refused; a value-less `--effort`
+  would have swallowed the pin).
+- review scans every line of the diff for secrets, not only added lines
+  (`git rm .env` sent the deleted keys), plus the full staged files.
+- `/agy:cancel` no longer trusts pids or paths in workspace job records (a
+  repo can commit them: 0.9.0-dev let a planted record make cancel delete
+  any directory or signal any process). It acts only through a private
+  per-user registry, and signals only when the worker's OS file lock proves
+  it is alive and ours — so a reused pid is never hit. A repo that commits
+  `.agy-plugin/` triggers a warning; a symlinked one is refused.
+- git runs with `core.fsmonitor=false` and `--no-textconv` (both can run
+  commands from a repo's config); curl ignores `~/.curlrc` and refuses
+  https→http redirects; PATH lookups skip relative entries (a repo could
+  plant its own `agy`, `git` or `curl`).
+- doc-to-md also refuses Maven, Pidgin, FileZilla, password-store, keyring,
+  browser/mail profile and Keychain locations and `%APPDATA%` credential
+  stores, and refuses outright when the home directory is unknown.
+- **scrape no longer lets agy fetch URLs.** The plugin downloads the page
+  with the system curl and agy only converts the saved copy. Every address
+  the host resolves to is checked and curl is pinned to it (`--resolve`),
+  which closes DNS rebinding; redirects are re-checked hop by hop; proxies
+  are bypassed unless `AGY_SCRAPE_USE_PROXY=1`. (agy 1.5.16 has no URL tool
+  in a read-only run anyway.)
+- SSRF guard: every embedded IPv4 in a hostname is checked, not only the
+  first (`1.2.3.4.127.0.0.1.nip.io` passed); numeric IPv4 is parsed the
+  WHATWG way; IPv6 mapped/compat/NAT64/6to4, dashed and hex `nip.io`/`sslip.io`
+  forms, single-label names (`metadata`), `localtest.me`-style loopback
+  domains, multicast and reserved ranges are blocked.
+- doc-to-md: on macOS the `/etc`, `/var/run` and home-dir deny-list compared
+  a resolved path with unresolved prefixes, so `/private/etc/...` slipped
+  through; fixed. The copy opens the file with `O_NOFOLLOW`.
+- An exported `AGY_CAPTURE_STAGE_FILE` made 0.8.x stage that file into any
+  read-only run without validation; staging now only takes validated
+  arguments.
+- The native PowerShell port ran agy without the auth check or any mode pin;
+  Windows now runs the same binary and guards.
+- agy's "re-run with --dangerously-skip-permissions" hint is no longer passed
+  on to Claude.
+- `PWD`, `OLDPWD` and `AGY_JOB_WORKSPACE` are removed from agy's environment
+  on read-only runs (they pointed at the repo).
+
+### Changed
+- `--model` passes agy's own `--model`; aliases resolve against `agy models`
+  to the newest model in the family (following upstream simplybychris 0.5.0).
+  settings.json is never patched any more; a backup left by an interrupted
+  0.8.x run is restored once.
+- One `review` implementation: `--base`, `--background`, `--wait` and
+  `--model` always work; the bash/node routing rule is gone. Reviews stage
+  the diff and full changed files on disk for agy.
+- Answers come from `--output-format json`; transcript scraping and the
+  write_file + auto-approve fallback are gone. **Requires agy 1.2.0+.**
+- Read-only prompts tell agy that shell commands and edits are unavailable
+  (without it, agy 1.5.16 often gave up with an empty answer).
+- `/agy:setup`'s check reports `pluginVersion` and whether agy is supported.
+
+### Fixed
+- The companion parsed `--model` for rescue/review/adversarial-review but
+  never passed it to agy.
+- `--fresh` did nothing (it is now documented as the default; `--resume`
+  continues the last conversation; both together are an error).
+- An unknown flag swallowed the next word, so `rescue --sandbox fix the bug`
+  lost the task.
+- `cancel` signalled only the worker, orphaning agy; workers now lead their
+  own process group and the whole group is stopped (`taskkill /T` on Windows).
+- An agy killed by a signal counted as success (exit 0).
+- `review --background --wait` deleted the stage dir on timeout while the
+  worker still used it.
+- A fast worker's final status could be overwritten with `running`; job
+  records are now updated under a lock, and the worker marks itself running.
+- `.agy-plugin/` was not git-excluded in linked worktrees, so the next rescue
+  saw a dirty tree.
+- `rescue --isolate` uses a `git clone --shared` checkout instead of a linked
+  worktree (its own `.git`, so agy can't touch the real repo's config or
+  hooks through it) and strips repo-location variables; foreground cancel
+  now also stops the agy child; stale temp dirs from killed runs are swept
+  after a day; git file names are read with `-z` (quotes, newlines and edge
+  spaces survived badly).
+- Launcher: download timeouts, safe concurrent first runs, a clear error
+  without HOME, and Ctrl+C no longer reports a bogus checksum mismatch.
+- `cancel` with no id picked the newest job even if it had finished; it now
+  picks the newest running one.
+- `ask … --print-timeout 20m` was killed after the default timeout.
+- macOS: agy's `--add-dir` now uses the resolved `/private/var/...` spelling
+  of the temp dir, matching agy's cwd.
+- image: no description gave "unbound variable" under bash 3.2 (upstream
+  d3b981f); moot in Rust, kept as a test.
+
+### Tests
+- The bats helper ran `set +e`, which turned every assertion in tests that
+  sourced the wrapper into a no-op — those tests could not fail. The Rust
+  suite replaces bats and vitest: 233 unit tests, 14 end-to-end tests that
+  drive the real binary against a recording stub agy, and launcher tests for
+  sh and PowerShell (checksum mismatch, tampered cache).
+- The secret matchers agree with the old regexes on 39,981 generated cases;
+  JSON number output matches `JSON.stringify` on 400,000 doubles; timestamps
+  match `toISOString` on 200,000 values.
+- An independent adversarial review of the port found the cancel, `--effort`
+  and deleted-secret issues above before release; each has a regression test.
+- `scripts/e2e-live.sh` runs every command against a real agy, including the
+  write-escape attempt; CI runs fmt, clippy `-D warnings` and tests on
+  Ubuntu, macOS and Windows and fails if any crate dependency appears.
+
 ## [0.8.1] - 2026-07-10 (limeflash)
 
 **Bug-hunt patch** — the 0.8.0 changes were run back through `agy` itself

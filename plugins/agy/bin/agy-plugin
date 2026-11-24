@@ -1,0 +1,122 @@
+#!/bin/sh
+# agy-plugin launcher. Runs the native agy-plugin binary for this machine.
+#
+# The binary is built by CI and published as a GitHub Release asset. On
+# first use it is downloaded once into a cache, and on EVERY run it is
+# checked against the SHA-256 in ./SHA256SUMS, which is committed to this
+# repository next to ./VERSION. A tampered release asset or cache entry is
+# refused, never executed.
+#
+# Overrides:
+#   AGY_PLUGIN_BIN            run this binary instead (development builds)
+#   AGY_PLUGIN_CACHE          cache dir (default: $XDG_CACHE_HOME or ~/.cache, /agy-plugin)
+#   AGY_PLUGIN_DOWNLOAD_BASE  release download base URL (tests, mirrors)
+set -eu
+
+if [ -n "${AGY_PLUGIN_BIN:-}" ]; then
+  exec "$AGY_PLUGIN_BIN" "$@"
+fi
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+version=$(tr -d ' \r\n' <"$here/VERSION")
+
+os=$(uname -s)
+case "$os" in
+  Darwin) os=apple-darwin ;;
+  Linux) os=unknown-linux-musl ;;
+  MINGW* | MSYS* | CYGWIN*) os=pc-windows-msvc ;;
+  *)
+    echo "agy-plugin: unsupported operating system '$os'" >&2
+    exit 1
+    ;;
+esac
+arch=$(uname -m)
+case "$arch" in
+  x86_64 | amd64) arch=x86_64 ;;
+  arm64 | aarch64) arch=aarch64 ;;
+  *)
+    echo "agy-plugin: unsupported CPU architecture '$arch'" >&2
+    exit 1
+    ;;
+esac
+exe=""
+[ "$os" = pc-windows-msvc ] && exe=.exe
+asset="agy-plugin-$arch-$os$exe"
+
+expected=$(awk -v f="$asset" '$2 == f || $2 == "*" f { print $1; exit }' "$here/SHA256SUMS")
+if [ -z "$expected" ]; then
+  echo "agy-plugin: no checksum for $asset in $here/SHA256SUMS (unsupported platform?)" >&2
+  exit 1
+fi
+
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$1" | awk '{ print $NF }'
+  else
+    echo "agy-plugin: need sha256sum, shasum or openssl to verify the binary" >&2
+    return 1
+  fi
+}
+
+if [ -n "${AGY_PLUGIN_CACHE:-}" ]; then
+  cache_root=$AGY_PLUGIN_CACHE
+elif [ -n "${XDG_CACHE_HOME:-}" ]; then
+  cache_root=$XDG_CACHE_HOME/agy-plugin
+elif [ -n "${HOME:-}" ]; then
+  cache_root=$HOME/.cache/agy-plugin
+else
+  echo "agy-plugin: neither HOME nor XDG_CACHE_HOME is set; set AGY_PLUGIN_CACHE" >&2
+  exit 1
+fi
+cache="$cache_root/$version"
+bin="$cache/$asset"
+
+if [ -f "$bin" ] && [ "$(sha256 "$bin")" = "$expected" ]; then
+  exec "$bin" "$@"
+fi
+
+base="${AGY_PLUGIN_DOWNLOAD_BASE:-https://github.com/limeflash/antigravity-plugin-cc/releases/download}"
+url="$base/v$version/$asset"
+mkdir -p "$cache"
+tmp="$bin.download.$$"
+trap 'rm -f "$tmp"' EXIT
+trap 'rm -f "$tmp"; exit 130' INT TERM
+echo "agy-plugin: downloading v$version for this machine ($asset)..." >&2
+if command -v curl >/dev/null 2>&1; then
+  # https only for the default source; an explicit override (a mirror, or
+  # file:// in tests) is used as given.
+  if [ -n "${AGY_PLUGIN_DOWNLOAD_BASE:-}" ]; then
+    curl -fsSL --connect-timeout 20 --max-time 300 -o "$tmp" "$url"
+  else
+    curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 300 -o "$tmp" "$url"
+  fi
+elif command -v wget >/dev/null 2>&1; then
+  wget -q --timeout=60 --tries=2 -O "$tmp" "$url"
+else
+  echo "agy-plugin: need curl or wget to download $url" >&2
+  exit 1
+fi
+actual=$(sha256 "$tmp")
+if [ "$actual" != "$expected" ]; then
+  echo "agy-plugin: checksum mismatch for $asset — refusing to run it." >&2
+  echo "            expected $expected" >&2
+  echo "            got      $actual" >&2
+  exit 1
+fi
+chmod 755 "$tmp"
+# A concurrent first run may have installed it meanwhile (and on Windows a
+# running .exe can't be replaced): use theirs if it verifies.
+if [ -f "$bin" ] && [ "$(sha256 "$bin")" = "$expected" ]; then
+  rm -f "$tmp"
+elif ! mv -f "$tmp" "$bin"; then
+  if ! { [ -f "$bin" ] && [ "$(sha256 "$bin")" = "$expected" ]; }; then
+    echo "agy-plugin: could not install $bin" >&2
+    exit 1
+  fi
+fi
+trap - EXIT INT TERM
+exec "$bin" "$@"
