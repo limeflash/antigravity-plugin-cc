@@ -142,9 +142,24 @@ export function isSensitivePath(realPath, homedir = os.homedir()) {
   const norm = (p) => (win ? p.toLowerCase() : p);
   const p = norm(realPath);
   const home = homedir;
-  const under = (base) => {
+  const underOne = (base) => {
     const b = norm(base);
     return p === b || p.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+  };
+  // `realPath` is already symlink-resolved, so the prefixes must be too: on
+  // macOS /etc and /var are symlinks to /private/etc and /private/var, and a
+  // home dir can sit behind a symlink. Comparing a realpath against the raw
+  // prefix made the check silently miss (/private/etc/x.txt was "not under
+  // /etc"). Check both spellings; a prefix that doesn't exist stays raw.
+  const under = (base) => {
+    if (underOne(base)) return true;
+    let real;
+    try {
+      real = realpathSync(base);
+    } catch {
+      return false;
+    }
+    return real !== base && underOne(real);
   };
   const sensitive = [
     path.join(home, ".ssh"),

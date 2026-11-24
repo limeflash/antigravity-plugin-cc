@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { promises as fsp } from "node:fs";
+import { promises as fsp, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -172,6 +172,20 @@ describe("validateDocPath", () => {
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/sensitive/);
     await fsp.rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it("treats a symlinked sensitive prefix as sensitive (macOS /etc -> /private/etc)", async () => {
+    // Simulate /etc -> /private/etc portably: a real dir plus a symlink to it
+    // used as the "home". The file path passed in is the realpath, as
+    // validateDocPath produces.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-symhome-"));
+    const realHome = path.join(root, "real-home");
+    const linkHome = path.join(root, "link-home");
+    await fsp.mkdir(path.join(realHome, ".ssh"), { recursive: true });
+    await fsp.symlink(realHome, linkHome);
+    const realFile = path.join(realpathSync(realHome), ".ssh", "notes.md");
+    expect(isSensitivePath(realFile, linkHome)).toBe(true);
+    await fsp.rm(root, { recursive: true, force: true });
   });
 });
 

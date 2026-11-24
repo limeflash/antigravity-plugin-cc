@@ -19,6 +19,7 @@ import {
 import { ensureDir, writeAtomic, nowIso } from "./fs.mjs";
 import { processAlive, terminate } from "./process.mjs";
 import { captureAnswer } from "./transcript.mjs";
+import { readOnlyModeArgs } from "./agy.mjs";
 
 const COMPANION_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -306,6 +307,19 @@ async function defaultAgyRunner(record, { sink } = {}) {
   // short-circuit to the transcript path before reaching here, but gate the
   // flag explicitly so a future non-write kind can never silently
   // auto-approve through this path (defense in depth).
+  // A non-write kind must also be pinned to Default agent mode (agy >=
+  // 1.5.7 would otherwise run it in Auto, which writes outside the
+  // workspace); refuse to run it when that isn't possible.
+  let modeArgs = [];
+  if (!writeCapable) {
+    const mode = await readOnlyModeArgs(agyBin);
+    if (!mode.ok) {
+      emit(`[agy-job ${record.id}] ${mode.error}\n`);
+      if (!stageDir) await fsp.rm(outDir, { recursive: true, force: true }).catch(() => {});
+      return 1;
+    }
+    modeArgs = mode.args;
+  }
   const args = [];
   if (writeCapable) args.push("--dangerously-skip-permissions");
   if (!writeCapable) args.push("--sandbox");
@@ -314,6 +328,8 @@ async function defaultAgyRunner(record, { sink } = {}) {
   // in --add-dir at all — for review everything it needs is in stageDir).
   if (writeCapable) args.push("--add-dir", execRoot);
   args.push(...(record.args ?? []));
+  // After the caller's args: agy takes the last value of a repeated flag.
+  args.push(...modeArgs);
   args.push("--print", augmented);
 
   const code = await new Promise((resolve) => {
@@ -391,12 +407,26 @@ async function runReviewViaTranscript(record, { emit }) {
     meta.stageDir ?? (await fsp.mkdtemp(path.join(os.tmpdir(), "agy-job-")));
   const logFile = path.join(stageDir, "agy-run.log");
 
+  // Pin Default agent mode: agy >= 1.5.7 starts headless runs in Auto mode,
+  // which approves writes OUTSIDE the workspace (verified on 1.5.16), so the
+  // stage-dir cwd alone no longer keeps a review from editing the repo.
+  // Fail closed when agy defaults to Auto but can't be pinned.
+  const mode = await readOnlyModeArgs(agyBin);
+  if (!mode.ok) {
+    emit(`[agy-job ${record.id}] ${mode.error}\n`);
+    await fsp.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    return 1;
+  }
+
   // --sandbox restricts terminal/shell tools where the OS supports it;
   // --add-dir grants read access to the staged diff/files only (the repo
   // is never added); --log-file lets us recover the conversation id and
-  // thus the transcript, race-free.
+  // thus the transcript, race-free. The mode pin goes AFTER the caller's
+  // args so a stray --settings there cannot override it (agy takes the
+  // last value of a repeated flag).
   const args = ["--sandbox", "--add-dir", stageDir, "--log-file", logFile];
   args.push(...(record.args ?? []));
+  args.push(...mode.args);
   args.push("--print", prompt);
 
   let stdoutBuf = "";

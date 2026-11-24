@@ -10,14 +10,18 @@ AGY_RUN="${REPO_ROOT}/plugins/agy/scripts/agy-run.sh"
 # Source the wrapper into the current shell. Bats runs each @test in a
 # subshell, so this is per-test scoped.
 #
-# The wrapper sets `set -euo pipefail` at the top. We turn errexit off
-# after sourcing because bats tests intentionally trigger non-zero exit
-# codes via `run` and assertions — we don't want a stray failing
-# assertion to abort the whole @test body.
+# The wrapper sets `set -euo pipefail` at the top. Keep errexit ON: bats
+# decides pass/fail through it, so a failing `[ ... ]` assertion must abort
+# the @test body. (Until 0.9.0 this helper ran `set +e`, which made every
+# assertion in a test that sourced the wrapper a no-op — those tests could
+# not fail.) Expected non-zero exits go through `run`, which captures them.
+# Only the wrapper's nounset/pipefail are dropped, to keep bats' own
+# internals safe.
 load_agy_run() {
   # shellcheck disable=SC1090
   source "$AGY_RUN"
-  set +e
+  set -e
+  set +u +o pipefail
 }
 
 # Run a function from agy-run.sh and capture stdout + exit code into

@@ -80,14 +80,22 @@ _image_source_in_allowlist() {
   local src="$1"
   [ -n "$src" ] || return 1
   local canonical; canonical="$(_canonicalize_path "$src")" || return 1
-  local prefix
-  for prefix in \
-      "$HOME/.gemini/antigravity-cli/brain/" \
-      "$HOME/.gemini/antigravity-cli/scratch/" \
-      "$HOME/.gemini/antigravity-cli/cache/"; do
+  # The source is canonicalized, so the allowed dirs must be too: when $HOME
+  # sits behind a symlink (macOS /var -> /private/var, a relocated home), a
+  # canonical source never starts with the raw "$HOME/..." prefix and a
+  # legitimate image was refused. Check both spellings of each dir.
+  local dir prefix real_dir
+  for dir in brain scratch cache; do
+    prefix="$HOME/.gemini/antigravity-cli/$dir"
     case "$canonical" in
-      "$prefix"*) return 0 ;;
+      "$prefix"/*) return 0 ;;
     esac
+    if [ -d "$prefix" ]; then
+      real_dir="$(_canonicalize_path "$prefix")" || continue
+      case "$canonical" in
+        "$real_dir"/*) return 0 ;;
+      esac
+    fi
   done
   return 1
 }
@@ -182,101 +190,286 @@ require_ready() {
   echo "$path"
 }
 
-# fd arg lets cmd_help reuse the same table on stdout.
+# ---------------------------------------------------------------------------
+# Model selection (--model).
+#
+# Aliases resolve at call time against `agy models` (one "id<TAB>display
+# name" row per model) to the NEWEST model in the alias's family, and the
+# result goes to agy's own --model flag for that one call. Ids and display
+# names listed by `agy models` are accepted verbatim, case-insensitive.
+# Nothing touches settings.json any more (0.9.0, ported from upstream
+# simplybychris/antigravity-plugin-cc 0.5.0; the old patch-and-restore flow
+# flipped the model of a TUI open in parallel and went stale whenever Google
+# renamed a model).
+#
+# Each row: comma-separated aliases | ERE matched against the lowercased
+# display name | ERE that wins a version tie (may be empty) | description
+# shown when no listing is available.
+# ---------------------------------------------------------------------------
+MODEL_ALIASES='flash-low|^gemini [0-9.]+ flash [(]low[)]$||newest Gemini Flash (Low)
+flash-medium,flash-med|^gemini [0-9.]+ flash [(]medium[)]$||newest Gemini Flash (Medium)
+flash,flash-high|^gemini [0-9.]+ flash [(]high[)]$||newest Gemini Flash (High)
+pro-low|^gemini [0-9.]+ pro [(]low[)]$||newest Gemini Pro (Low)
+pro,pro-high|^gemini [0-9.]+ pro [(]high[)]$||newest Gemini Pro (High)
+sonnet,claude-sonnet|^claude sonnet [0-9.]+( [(].*[)])?$|[(]thinking[)]$|newest Claude Sonnet
+opus,claude-opus|^claude opus [0-9.]+( [(].*[)])?$|[(]thinking[)]$|newest Claude Opus
+gpt-oss,gpt-oss-120b|^gpt-oss 120b( [(].*[)])?$|[(]medium[)]$|GPT-OSS 120B'
+
+# Older agy builds ignore --model in -p runs (fixed in 1.1.10) or hang in
+# `agy models` on an open stdin.
+MIN_AGY_MODEL_VERSION="1.2.0"
+
+# agy 1.5.7 made Auto the default Agent Mode, headless -p runs included, and
+# Auto approves file writes OUTSIDE the workspace (any file in a git repo,
+# and any create/append elsewhere). See _readonly_mode_flags.
+AGY_AUTO_DEFAULT_VERSION="1.5.7"
+
+TAB="$(printf '\t')"
+
+AWK_VERSION_NEWER='
+function newer(a, b,    x, y, na, nb, n, i) {
+  na = split(a, x, "."); nb = split(b, y, ".")
+  n = na > nb ? na : nb
+  for (i = 1; i <= n; i++) {
+    if (x[i] + 0 > y[i] + 0) return 1
+    if (x[i] + 0 < y[i] + 0) return 0
+  }
+  return 0
+}'
+
+# Prints agy's version ("1.5.16"), or nothing if it can't be read.
+_agy_version() {
+  "$1" --version </dev/null 2>/dev/null | grep -oE '[0-9]+[.][0-9]+([.][0-9]+)?' | head -n1 || true
+}
+
+# True when version $1 is >= version $2.
+_version_at_least() {
+  [ "$(awk -v a="$2" -v b="$1" "$AWK_VERSION_NEWER"'
+      BEGIN { print newer(a, b) }')" = 0 ]
+}
+
+require_model_support() {
+  local path="$1" version
+  version="$(_agy_version "$path")"
+  if [ -z "$version" ]; then
+    echo "[wrapper] note: could not read the agy version; assuming --model works" >&2
+    return 0
+  fi
+  if ! _version_at_least "$version" "$MIN_AGY_MODEL_VERSION"; then
+    echo "error: agy $version is too old for --model (needs $MIN_AGY_MODEL_VERSION or newer)." >&2
+    echo "       update it with \`agy update\`." >&2
+    exit 1
+  fi
+}
+
+# Prints "id<TAB>display name" per model. Some agy builds print names only,
+# in which case the id column is empty.
+list_models() {
+  local path="$1" raw
+  raw="$("$path" models </dev/null 2>/dev/null)" || return 1
+  printf '%s\n' "$raw" | awk '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*$/ || /:[[:space:]]*$/ || /^Fetching / { next }
+    {
+      tab = index($0, "\t")
+      if (tab > 0) { id = substr($0, 1, tab - 1); name = substr($0, tab + 1) }
+      else { id = ""; name = $0 }
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", id)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      if (name != "") print id "\t" name
+    }'
+}
+
+# Line of $1 (list_models output) whose name matches ERE $2 and has the
+# newest version. On a version tie, a name matching ERE $3 wins.
+_newest_match() {
+  printf '%s\n' "$1" | PATTERN="$2" PREFER="${3:-}" awk -F '\t' "$AWK_VERSION_NEWER"'
+    NF >= 2 && tolower($2) ~ ENVIRON["PATTERN"] {
+      version = ""
+      count = split(tolower($2), word, " ")
+      for (i = 1; i <= count; i++) if (word[i] ~ /^[0-9]+([.][0-9]+)*$/) { version = word[i]; break }
+      preferred = ENVIRON["PREFER"] != "" && tolower($2) ~ ENVIRON["PREFER"]
+      if (best == "" || newer(version, best_version) ||
+          (!newer(best_version, version) && preferred && !best_preferred)) {
+        best = $0; best_version = version; best_preferred = preferred
+      }
+    }
+    END { if (best != "") print best }'
+}
+
+# Line of $1 whose id or name equals $2, ignoring case.
+_exact_match() {
+  printf '%s\n' "$1" | WANT="$2" awk -F '\t' '
+    NF >= 2 && (tolower($1) == tolower(ENVIRON["WANT"]) || tolower($2) == tolower(ENVIRON["WANT"])) { print; exit }'
+}
+
+_model_name() {
+  printf '%s' "${1#*"$TAB"}"
+}
+
+# The id when the listing has one, otherwise the display name.
+_model_arg() {
+  local id="${1%%"$TAB"*}"
+  if [ -n "$id" ]; then
+    printf '%s' "$id"
+  else
+    _model_name "$1"
+  fi
+}
+
+# Prints "pattern|prefer|description" for alias $1 (already lowercased).
+_alias_row() {
+  local want="$1" aliases pattern prefer description
+  case "$want" in "" | *,*) return 1 ;; esac
+  while IFS='|' read -r aliases pattern prefer description; do
+    case ",$aliases," in
+      *",$want,"*)
+        printf '%s|%s|%s' "$pattern" "$prefer" "$description"
+        return 0
+        ;;
+    esac
+  done <<<"$MODEL_ALIASES"
+  return 1
+}
+
+# $1 = output fd, $2 = list_models output (may be empty).
 print_model_table() {
-  local fd="${1:-2}"
+  local fd="${1:-2}" models="${2:-}"
   {
-    echo "Aliases (case-insensitive):"
-    echo "  flash-low                     -> Gemini 3.5 Flash (Low)"
-    echo "  flash-medium, flash-med       -> Gemini 3.5 Flash (Medium)"
-    echo "  flash, flash-high             -> Gemini 3.5 Flash (High)"
-    echo "  pro-low                       -> Gemini 3.1 Pro (Low)"
-    echo "  pro, pro-high                 -> Gemini 3.1 Pro (High)"
-    echo "  sonnet, claude-sonnet         -> Claude Sonnet 4.6 (Thinking)"
-    echo "  opus, claude-opus             -> Claude Opus 4.6 (Thinking)"
-    echo "  gpt-oss, gpt-oss-120b         -> GPT-OSS 120B (Medium)"
-    echo
-    echo "Canonical strings (also accepted verbatim, case-sensitive):"
-    echo "  Gemini 3.5 Flash (Low|Medium|High)"
-    echo "  Gemini 3.1 Pro (Low|High)"
-    echo "  Claude Sonnet 4.6 (Thinking)"
-    echo "  Claude Opus 4.6 (Thinking)"
-    echo "  GPT-OSS 120B (Medium)"
+    if [ -n "$models" ]; then
+      echo "Aliases (case-insensitive), resolved against \`agy models\`:"
+    else
+      echo "Aliases (case-insensitive). \`agy models\` could not be read, so they are shown unresolved:"
+    fi
+    local aliases pattern prefer description match target
+    while IFS='|' read -r aliases pattern prefer description; do
+      target="$description"
+      if [ -n "$models" ]; then
+        match="$(_newest_match "$models" "$pattern" "$prefer")"
+        if [ -n "$match" ]; then
+          target="$(_model_name "$match")"
+        else
+          target="(not available: $description)"
+        fi
+      fi
+      printf '  %-28s  -> %s\n' "$(printf '%s' "$aliases" | sed 's/,/, /g')" "$target"
+    done <<<"$MODEL_ALIASES"
+    if [ -n "$models" ]; then
+      echo
+      echo "Available models (names and ids are accepted verbatim, case-insensitive):"
+      printf '%s\n' "$models" | awk -F '\t' '{ if ($1 != "") printf "  %-32s  %s\n", $2, $1; else printf "  %s\n", $2 }'
+    fi
   } >&"$fd"
 }
 
 _current_default_model() {
   [ -f "$AGY_SETTINGS_FILE" ] || return 1
-  grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$AGY_SETTINGS_FILE" 2>/dev/null \
-    | sed -E 's/.*"model"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
-    | head -n1
+  grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$AGY_SETTINGS_FILE" 2>/dev/null |
+    sed -E 's/.*"model"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' |
+    head -n1
 }
 
-resolve_model_alias() {
-  local input="${1:-}"
-  if [ -z "$input" ]; then
-    echo "error: --model requires a non-empty value (e.g. --model pro)" >&2
-    print_model_table 2
-    local current; current="$(_current_default_model 2>/dev/null || true)"
-    if [ -n "$current" ]; then
-      echo >&2
-      echo "Tip: omit --model to use your current default (\"$current\")." >&2
-    fi
-    exit 64
+model_value_error() {
+  echo "error: --model requires a non-empty value (e.g. --model pro)" >&2
+  local path models=""
+  if path="$(find_agy)"; then
+    models="$(list_models "$path" || true)"
   fi
-  case "$input" in
-    "Gemini 3.5 Flash (Low)"|\
-    "Gemini 3.5 Flash (Medium)"|\
-    "Gemini 3.5 Flash (High)"|\
-    "Gemini 3.1 Pro (Low)"|\
-    "Gemini 3.1 Pro (High)"|\
-    "Claude Sonnet 4.6 (Thinking)"|\
-    "Claude Opus 4.6 (Thinking)"|\
-    "GPT-OSS 120B (Medium)")
-      printf '%s' "$input"
-      return 0 ;;
-  esac
-  # bash 3.2 (macOS /bin/bash) lacks ${var,,}, hence tr.
-  local lc; lc="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')"
-  case "$lc" in
-    flash-low)                  printf '%s' "Gemini 3.5 Flash (Low)" ;;
-    flash-medium|flash-med)     printf '%s' "Gemini 3.5 Flash (Medium)" ;;
-    flash|flash-high)           printf '%s' "Gemini 3.5 Flash (High)" ;;
-    pro-low)                    printf '%s' "Gemini 3.1 Pro (Low)" ;;
-    pro|pro-high)               printf '%s' "Gemini 3.1 Pro (High)" ;;
-    sonnet|claude-sonnet)       printf '%s' "Claude Sonnet 4.6 (Thinking)" ;;
-    opus|claude-opus)           printf '%s' "Claude Opus 4.6 (Thinking)" ;;
-    gpt-oss|gpt-oss-120b)       printf '%s' "GPT-OSS 120B (Medium)" ;;
-    *)
-      echo "error: unknown model alias '$input'" >&2
-      print_model_table 2
-      exit 64 ;;
-  esac
+  print_model_table 2 "$models"
+  local current
+  current="$(_current_default_model 2>/dev/null || true)"
+  if [ -n "$current" ]; then
+    echo >&2
+    echo "Tip: omit --model to use your current default (\"$current\")." >&2
+  fi
+  exit 64
 }
 
-validate_settings_file() {
-  if [ ! -f "$AGY_SETTINGS_FILE" ]; then
-    echo "error: $AGY_SETTINGS_FILE not found." >&2
-    echo "       run \`agy\` once interactively to create it." >&2
-    exit 1
-  fi
-  if [ ! -s "$AGY_SETTINGS_FILE" ]; then
-    echo "error: $AGY_SETTINGS_FILE is empty." >&2
-    exit 1
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$AGY_SETTINGS_FILE" 2>/dev/null; then
-      echo "error: $AGY_SETTINGS_FILE is not valid JSON." >&2
+# Prints the value for `agy --model`: the id when `agy models` lists one,
+# otherwise the display name. Exits 64 for an unknown alias / model.
+resolve_model() {
+  local path="$1" input="$2"
+  local lc
+  lc="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')"
+  local row=""
+  row="$(_alias_row "$lc" || true)"
+  local models
+  if ! models="$(list_models "$path")" || [ -z "$models" ]; then
+    if [ -n "$row" ]; then
+      echo "error: could not list models with \`agy models\` (run it directly to see why)." >&2
+      echo "       aliases need that list; pass the full model name instead." >&2
       exit 1
     fi
+    echo "[wrapper] note: could not list models; passing '$input' to agy unchecked" >&2
+    printf '%s' "$input"
+    return 0
   fi
-  if ! grep -q '"model"' "$AGY_SETTINGS_FILE"; then
-    echo "error: $AGY_SETTINGS_FILE has no \"model\" field." >&2
-    echo "       open \`agy\` and pick a model with /model first." >&2
-    exit 1
+  local match pattern prefer description
+  match="$(_exact_match "$models" "$input")"
+  if [ -z "$match" ] && [ -n "$row" ]; then
+    IFS='|' read -r pattern prefer description <<<"$row"
+    match="$(_newest_match "$models" "$pattern" "$prefer")"
+    [ -n "$match" ] || echo "error: alias '$input' has no matching model in \`agy models\` (expected: $description)" >&2
+  elif [ -z "$match" ]; then
+    echo "error: unknown model '$input' (not an alias and not listed by \`agy models\`)" >&2
   fi
+  if [ -n "$match" ]; then
+    _model_arg "$match"
+    return 0
+  fi
+  print_model_table 2 "$models"
+  exit 64
 }
 
+# Prints the --model value for one call, or nothing when --model wasn't
+# given. $1 = agy path, $2 = 1 if --model was seen, $3 = its value.
+_model_for_call() {
+  local path="$1" seen="$2" value="$3"
+  [ "$seen" -eq 1 ] || return 0
+  require_model_support "$path"
+  resolve_model "$path" "$value"
+}
+
+# ---------------------------------------------------------------------------
+# Read-only agent mode.
+#
+# Since agy 1.5.7 headless -p runs start in Auto mode, and Auto approves
+# writes OUTSIDE the workspace without asking: any file inside a git /
+# jj / hg repo (1.5.16) and any create or append elsewhere. So running agy
+# from a throwaway temp dir no longer keeps it from writing: verified on
+# agy 1.5.16, a plugin-style run with no --dangerously-skip-permissions
+# overwrote a file in a git repo outside its workspace when the prompt asked
+# it to. A prompt-injected diff could do the same to the user's repo, or
+# append to ~/.zshrc.
+#
+# Default mode ("agentMode": "" in settings.json) makes a headless run deny
+# what it may not do instead (reported as denied_actions). --settings
+# applies it to this run only, never saved. Sets the global AGY_RO_FLAGS
+# array. Fails closed: an agy that defaults to Auto but can't be pinned is
+# refused rather than run.
+# ---------------------------------------------------------------------------
+_readonly_mode_flags() {
+  local agy="$1" help version
+  AGY_RO_FLAGS=()
+  help="$("$agy" --help </dev/null 2>&1 || true)"
+  case "$help" in
+    *--settings*)
+      AGY_RO_FLAGS=(--settings '{"agentMode":""}')
+      return 0
+      ;;
+  esac
+  version="$(_agy_version "$agy")"
+  if [ -n "$version" ] && _version_at_least "$version" "$AGY_AUTO_DEFAULT_VERSION"; then
+    echo "error: agy $version starts headless runs in Auto mode, which can write outside" >&2
+    echo "       the workspace, and this build has no --settings flag to pin Default mode." >&2
+    echo "       Refusing to run a read-only command. Update agy with \`agy update\`." >&2
+    return 1
+  fi
+  return 0
+}
+
+# Recovers settings.json left patched by a killed run of plugin <= 0.8.x,
+# which swapped the model in place instead of passing --model.
 restore_orphaned_backup() {
   [ -f "$AGY_SETTINGS_SENTINEL" ] || {
     if [ -f "$AGY_SETTINGS_BACKUP" ]; then
@@ -285,7 +478,8 @@ restore_orphaned_backup() {
     fi
     return 0
   }
-  local pid; pid="$(head -n1 "$AGY_SETTINGS_SENTINEL" 2>/dev/null || true)"
+  local pid
+  pid="$(head -n1 "$AGY_SETTINGS_SENTINEL" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     return 0
   fi
@@ -294,92 +488,7 @@ restore_orphaned_backup() {
     echo "[wrapper] recovered orphaned settings backup from PID ${pid:-unknown}" >&2
   fi
   rm -f "$AGY_SETTINGS_SENTINEL"
-}
-
-# mkdir-based lock; macOS has no flock(1). Dead-holder detection avoids
-# SIGKILL deadlocks.
-with_settings_lock() {
-  local fn="$1"; shift
-  local attempt=0
-  local max_wait="${AGY_LOCK_WAIT_SECONDS:-600}"
-  while ! mkdir "$AGY_SETTINGS_LOCKDIR" 2>/dev/null; do
-    local holder_pid_file="${AGY_SETTINGS_LOCKDIR}/pid"
-    if [ -f "$holder_pid_file" ]; then
-      local holder_pid; holder_pid="$(cat "$holder_pid_file" 2>/dev/null || true)"
-      if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null; then
-        rm -rf "$AGY_SETTINGS_LOCKDIR"
-        continue
-      fi
-    fi
-    attempt=$((attempt + 1))
-    if [ "$attempt" -gt "$max_wait" ]; then
-      echo "error: could not acquire settings lock after ${max_wait}s" >&2
-      exit 1
-    fi
-    sleep 1
-  done
-  echo "$$" > "${AGY_SETTINGS_LOCKDIR}/pid"
-  local rc=0
-  "$fn" "$@" || rc=$?
   rm -rf "$AGY_SETTINGS_LOCKDIR"
-  return "$rc"
-}
-
-# python3 preferred for correctness; sed fallback only matches single-line
-# "model": "..." (the format agy itself writes).
-_patch_model_field() {
-  local canonical="$1"
-  local tmp; tmp="$(mktemp "${AGY_SETTINGS_FILE}.tmp.XXXXXX")"
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$AGY_SETTINGS_FILE" "$canonical" "$tmp" <<'PY'
-import json, sys
-src, model, dst = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(src) as f:
-    data = json.load(f)
-data["model"] = model
-with open(dst, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PY
-  else
-    local esc; esc="$(printf '%s' "$canonical" | sed -e 's/[\/&]/\\&/g')"
-    sed -E "s/^([[:space:]]*\"model\"[[:space:]]*:[[:space:]]*\")[^\"]*(\".*)$/\1${esc}\2/" \
-        "$AGY_SETTINGS_FILE" > "$tmp"
-    echo "[wrapper] note: python3 missing, used sed fallback to patch settings.json" >&2
-  fi
-  mv "$tmp" "$AGY_SETTINGS_FILE"
-}
-
-_restore_settings() {
-  if [ -f "$AGY_SETTINGS_BACKUP" ]; then
-    mv "$AGY_SETTINGS_BACKUP" "$AGY_SETTINGS_FILE"
-  fi
-  rm -f "$AGY_SETTINGS_SENTINEL"
-}
-
-_do_patched_run() {
-  local canonical="$1"; shift
-  cp -p "$AGY_SETTINGS_FILE" "$AGY_SETTINGS_BACKUP"
-  printf '%s\n%s\n' "$$" "$canonical" > "$AGY_SETTINGS_SENTINEL"
-  trap '_restore_settings' EXIT INT TERM HUP
-  _patch_model_field "$canonical"
-  local rc=0
-  "$@" || rc=$?
-  _restore_settings
-  trap - EXIT INT TERM HUP
-  return "$rc"
-}
-
-# `--` separator guards against canonical names that start with `-`.
-with_model_override() {
-  local canonical="$1"; shift
-  if [ "${1:-}" != "--" ]; then
-    echo "internal: with_model_override expects '--' after canonical name" >&2
-    exit 70
-  fi
-  shift
-  validate_settings_file
-  with_settings_lock _do_patched_run "$canonical" "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -403,24 +512,40 @@ with_model_override() {
 # it persists on every --print run with NO tool permission — via
 # lib/transcript.mjs (the conversation id comes from the run's --log-file).
 #
-# FALLBACK 2 (_agy_capture_writefile): only when `node` is unavailable (the
-# transcript is JSONL, parsed with node). Reverts to instructing agy to
-# write_file its answer under --dangerously-skip-permissions, scoped to a
-# throwaway temp dir. Kept so /agy:ask still works without node.
+# FALLBACK 2 (_agy_capture_writefile): only for agy < 1.0.15 (stdout still
+# empty) on a machine without `node` (no transcript parser). Reverts to
+# instructing agy to write_file its answer under
+# --dangerously-skip-permissions, scoped to a throwaway temp dir. On newer
+# agy the stdout path needs no node, so this auto-approving path is never
+# taken there (on agy >= 1.5.2 the flag also approves writes OUTSIDE the
+# workspace, so it must stay out of reach of modern installs).
 #
-# Usage: _agy_capture <agy> <canonical-model-or-empty> <timeout> <prompt> [extra agy args...]
+# Every run is pinned to Default agent mode (_readonly_mode_flags): agy
+# >= 1.5.7 otherwise starts in Auto, which writes outside the workspace.
+#
+# Usage: _agy_capture <agy> <model-or-empty> <timeout> <prompt> [extra agy args...]
+# <model> is the value for agy's own --model (see resolve_model).
 # Prints the response on success (rc 0); prints an error and rc 1 otherwise.
 # ---------------------------------------------------------------------------
 _agy_capture() {
-  local agy="$1" canonical="$2" timeout="$3" prompt="$4"
+  local agy="$1" model="$2" timeout="$3" prompt="$4"
   shift 4
 
-  # The transcript is JSONL; we parse it with node. Without node, fall back
-  # to the write_file capture so /agy:ask still works everywhere.
+  # Without node there is no transcript fallback. That only matters for agy
+  # < 1.0.15, whose non-TTY stdout is empty: use the write_file capture
+  # there. Newer agy answers on stdout, which needs no node.
   if ! command -v node >/dev/null 2>&1; then
-    _agy_capture_writefile "$agy" "$canonical" "$timeout" "$prompt" "$@"
-    return $?
+    local v
+    v="$(_agy_version "$agy")"
+    if [ -n "$v" ] && ! _version_at_least "$v" "1.0.15"; then
+      _agy_capture_writefile "$agy" "$model" "$timeout" "$prompt" "$@"
+      return $?
+    fi
   fi
+
+  _readonly_mode_flags "$agy" || return 1
+  local -a model_flags=()
+  [ -z "$model" ] || model_flags=(--model "$model")
 
   local outdir
   outdir="$(mktemp -d 2>/dev/null)" || { echo "error: could not create temp dir for agy output" >&2; return 1; }
@@ -447,10 +572,13 @@ _agy_capture() {
   # CRITICAL: we run agy FROM the throwaway temp dir (cwd="$outdir"), NOT the
   # user's repo. `agy --print` still EXECUTES write tools even without
   # --dangerously-skip-permissions (a non-TTY prompt is auto-proceeded), so
-  # "no auto-approve" alone does NOT make a command read-only. What makes it
-  # read-only is that the repo is neither agy's cwd nor in --add-dir, so it
-  # has no path to write there. cwd_arg therefore points at the temp dir
-  # (also the workspace key agy registers — used as the transcript fallback).
+  # "no auto-approve" alone does NOT make a command read-only. Two things
+  # do, together: the repo is neither agy's cwd nor in --add-dir (so it is
+  # outside the workspace), and the run is pinned to Default agent mode (so
+  # writes outside the workspace are denied; agy >= 1.5.7's Auto mode would
+  # approve them, absolute paths included). cwd_arg therefore points at the
+  # temp dir (also the workspace key agy registers — used as the transcript
+  # fallback).
   local target_dir logfile_arg cwd_arg
   if command -v cygpath >/dev/null 2>&1; then
     target_dir="$(cygpath -w "$outdir")"
@@ -472,22 +600,13 @@ _agy_capture() {
     prompt="$(printf '%s' "$prompt" | head -c "$max_body" || true)"$'\n\n[...content truncated to fit the OS command-line length limit; some context was omitted...]'
   fi
 
-  # Per-call model override decision (unchanged): agy 1.0.x has no top-level
-  # "model" key until the user sets one in the TUI, so degrade gracefully
-  # rather than hard-fail.
-  local use_override=0
-  if [ -n "$canonical" ]; then
-    if [ -f "$AGY_SETTINGS_FILE" ] && grep -q '"model"' "$AGY_SETTINGS_FILE" 2>/dev/null; then
-      use_override=1
-    else
-      echo "[wrapper] note: --model requested, but agy's settings.json has no \"model\" field to patch on this version; using the current default model instead. (Set a model once in the agy TUI to enable per-call overrides.)" >&2
-    fi
-  fi
-
   # READ-ONLY run: execute agy FROM the throwaway temp dir (cwd="$outdir"),
-  # with --sandbox + --add-dir <tmp> + --log-file and NO
-  # --dangerously-skip-permissions / NO write_file. Running outside the repo
-  # is what actually enforces read-only (see the cwd note above).
+  # with --sandbox + --add-dir <tmp> + --log-file, pinned to Default agent
+  # mode, and NO --dangerously-skip-permissions / NO write_file. The temp-dir
+  # cwd keeps the repo out of agy's workspace; Default mode makes the
+  # headless run deny writes outside it (Auto would approve them).
+  # AGY_RO_FLAGS goes AFTER the caller's extra args so a stray --settings in
+  # them cannot override it (agy takes the last value of a flag).
   # `env -u …` strips the repo-location hints (CLAUDE_PROJECT_DIR / GIT_*) from
   # agy's environment as defense in depth. </dev/null dodges the non-TTY stdin
   # hang. We capture stdout to a file: agy >= 1.0.15 fixed the #76 bug that
@@ -495,15 +614,13 @@ _agy_capture() {
   # is the fallback for older agy where stdout still comes back empty.
   local stdout_file="$outdir/agy-stdout.txt"
   local -a agy_env=(env -u CLAUDE_PROJECT_DIR -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR)
-  if [ "$use_override" -eq 1 ]; then
-    ( cd "$outdir" && with_model_override "$canonical" -- "${agy_env[@]}" "$agy" --sandbox \
-      --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
-      </dev/null >"$stdout_file" 2>/dev/null ) || true
-  else
-    ( cd "$outdir" && "${agy_env[@]}" "$agy" --sandbox \
-      --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
-      </dev/null >"$stdout_file" 2>/dev/null ) || true
-  fi
+  # ${arr[@]+"${arr[@]}"}: bash 3.2 (macOS /bin/bash) treats "${arr[@]}" of
+  # an empty array as unbound under `set -u`.
+  (cd "$outdir" && "${agy_env[@]}" "$agy" --sandbox \
+    --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" \
+    ${model_flags[@]+"${model_flags[@]}"} "$@" ${AGY_RO_FLAGS[@]+"${AGY_RO_FLAGS[@]}"} \
+    --print "$prompt" \
+    </dev/null >"$stdout_file" 2>/dev/null) || true
 
   # Prefer agy's direct stdout (the #76 fix). Fall back to reading agy's own
   # transcript for older agy / platforms where non-TTY stdout is still empty.
@@ -542,7 +659,7 @@ _agy_capture() {
 # _agy_capture header for why the transcript path is preferred.
 # ---------------------------------------------------------------------------
 _agy_capture_writefile() {
-  local agy="$1" canonical="$2" timeout="$3" prompt="$4"
+  local agy="$1" model="$2" timeout="$3" prompt="$4"
   shift 4
   local outdir
   outdir="$(mktemp -d 2>/dev/null)" || { echo "error: could not create temp dir for agy output" >&2; return 1; }
@@ -572,35 +689,21 @@ _agy_capture_writefile() {
   local augmented
   augmented="$(printf '%s\n\n---\nOUTPUT INSTRUCTION (required): Use the write_file tool to write your COMPLETE response to this exact path:\n%s\nDo NOT print the answer to chat — that path is your only deliverable. After writing the file, stop.\n' "$prompt" "$prompt_path")"
 
-  # Decide whether the per-call model override is actually usable. agy
-  # 1.0.x does NOT keep a top-level "model" key in settings.json until
-  # the user changes the model in the TUI, so the patch-and-restore path
-  # has nothing to patch. Rather than hard-fail the whole command (the
-  # old validate_settings_file did `exit 1`), degrade gracefully: warn
-  # once and run with agy's current default model.
-  local use_override=0
-  if [ -n "$canonical" ]; then
-    if [ -f "$AGY_SETTINGS_FILE" ] && grep -q '"model"' "$AGY_SETTINGS_FILE" 2>/dev/null; then
-      use_override=1
-    else
-      echo "[wrapper] note: --model requested, but agy's settings.json has no \"model\" field to patch on this version; using the current default model instead. (Set a model once in the agy TUI to enable per-call overrides.)" >&2
-    fi
-  fi
+  # Only agy < 1.0.15 reaches this path, and --model needs >= 1.2.0
+  # (require_model_support), so a model value never gets here; pass it on
+  # anyway rather than silently drop it.
+  local -a model_flags=()
+  [ -z "$model" ] || model_flags=(--model "$model")
 
   # Strip repo-location hints (CLAUDE_PROJECT_DIR / GIT_*) from agy's env as
   # defense in depth — same as _agy_capture. This fallback runs agy under
   # --dangerously-skip-permissions, so denying it a pointer to the host repo
   # matters even though the repo is still never its cwd nor in --add-dir.
   local -a agy_env=(env -u CLAUDE_PROJECT_DIR -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR)
-  if [ "$use_override" -eq 1 ]; then
-    ( cd "$outdir" && with_model_override "$canonical" -- "${agy_env[@]}" "$agy" --dangerously-skip-permissions --sandbox \
-      --add-dir "$target_dir" --print-timeout "$timeout" "$@" --print "$augmented" \
-      </dev/null >/dev/null 2>&1 ) || true
-  else
-    ( cd "$outdir" && "${agy_env[@]}" "$agy" --dangerously-skip-permissions --sandbox \
-      --add-dir "$target_dir" --print-timeout "$timeout" "$@" --print "$augmented" \
-      </dev/null >/dev/null 2>&1 ) || true
-  fi
+  (cd "$outdir" && "${agy_env[@]}" "$agy" --dangerously-skip-permissions --sandbox \
+    --add-dir "$target_dir" --print-timeout "$timeout" \
+    ${model_flags[@]+"${model_flags[@]}"} "$@" --print "$augmented" \
+    </dev/null >/dev/null 2>&1) || true
 
   local rc=0
   if [ -s "$outfile" ]; then
@@ -628,7 +731,7 @@ cmd_ask() {
       --model)
         model_flag_seen=1
         # `shift 2` on a one-arg list would `set -e`-exit silently; handle
-        # the empty case so resolve_model_alias prints the real error.
+        # the empty case so model_value_error prints the real error.
         if [ $# -ge 2 ]; then
           model_alias="$2"; shift 2
         else
@@ -642,10 +745,9 @@ cmd_ask() {
       *)         break ;;
     esac
   done
-  # Resolve model before prompt check so empty --model gets the right error.
-  local canonical=""
-  if [ "$model_flag_seen" -eq 1 ]; then
-    canonical="$(resolve_model_alias "$model_alias")"
+  # Check the value before the prompt so `ask --model` reports the flag.
+  if [ "$model_flag_seen" -eq 1 ] && [ -z "$model_alias" ]; then
+    model_value_error
   fi
   local prompt="${1:-}"
   shift || true
@@ -653,11 +755,12 @@ cmd_ask() {
     echo "error: ask requires a prompt argument" >&2
     exit 64
   fi
-  local path
+  local path model
   path="$(require_ready)"
-  # Route through the read-only transcript capture (agy issue #76). Default
-  # to an 8-minute timeout; agy usually answers within seconds.
-  _agy_capture "$path" "$canonical" "${AGY_ASK_TIMEOUT:-8m0s}" "$prompt" "$@"
+  model="$(_model_for_call "$path" "$model_flag_seen" "$model_alias")"
+  # Read-only capture (stdout, transcript fallback). Default to an 8-minute
+  # timeout; agy usually answers within seconds.
+  _agy_capture "$path" "$model" "${AGY_ASK_TIMEOUT:-8m0s}" "$prompt" "$@"
 }
 
 # /agy:scrape <url> [--model <alias>] — fetch a web page read-only and return
@@ -676,8 +779,9 @@ cmd_scrape() {
       *)         break ;;
     esac
   done
-  local canonical=""
-  [ "$model_flag_seen" -eq 1 ] && canonical="$(resolve_model_alias "$model_alias")"
+  if [ "$model_flag_seen" -eq 1 ] && [ -z "$model_alias" ]; then
+    model_value_error
+  fi
   local url="${1:-}"
   if [ -z "$url" ]; then
     echo "error: scrape requires a URL argument (http/https)" >&2
@@ -692,11 +796,12 @@ cmd_scrape() {
     echo "error: refusing to scrape this URL — $safe_url" >&2
     exit 65
   fi
-  local path
+  local path model
   path="$(require_ready)"
+  model="$(_model_for_call "$path" "$model_flag_seen" "$model_alias")"
   local prompt
   prompt="$(printf 'Fetch the web page at the URL below and return its MAIN readable content as clean Markdown — preserve headings, lists, links, tables, and code blocks; drop nav/ads/boilerplate. Output ONLY the Markdown, no preamble.\n\nURL: %s' "$safe_url")"
-  _agy_capture "$path" "$canonical" "${AGY_SCRAPE_TIMEOUT:-5m0s}" "$prompt"
+  _agy_capture "$path" "$model" "${AGY_SCRAPE_TIMEOUT:-5m0s}" "$prompt"
 }
 
 # /agy:doc-to-md <path> [--model <alias>] — convert a local document to
@@ -716,8 +821,9 @@ cmd_doc_to_md() {
       *)         break ;;
     esac
   done
-  local canonical=""
-  [ "$model_flag_seen" -eq 1 ] && canonical="$(resolve_model_alias "$model_alias")"
+  if [ "$model_flag_seen" -eq 1 ] && [ -z "$model_alias" ]; then
+    model_value_error
+  fi
   local input="${1:-}"
   if [ -z "$input" ]; then
     echo "error: doc-to-md requires a file path" >&2
@@ -732,8 +838,9 @@ cmd_doc_to_md() {
     echo "error: refusing to convert this file — $real" >&2
     exit 65
   fi
-  local path
+  local path model
   path="$(require_ready)"
+  model="$(_model_for_call "$path" "$model_flag_seen" "$model_alias")"
   # Stage under a FIXED name derived only from the validated extension — the
   # untrusted original filename is never interpolated into the prompt (prompt
   # injection guard).
@@ -742,7 +849,7 @@ cmd_doc_to_md() {
   local prompt
   prompt="$(printf 'Read the file named "%s" in your workspace and convert it to clean, well-structured Markdown. Preserve headings, lists, tables, links, and code blocks. Output ONLY the Markdown — no preamble, no commentary.' "$staged")"
   AGY_CAPTURE_STAGE_FILE="$real" AGY_CAPTURE_STAGE_AS="$staged" \
-    _agy_capture "$path" "$canonical" "${AGY_DOCTOMD_TIMEOUT:-8m0s}" "$prompt"
+    _agy_capture "$path" "$model" "${AGY_DOCTOMD_TIMEOUT:-8m0s}" "$prompt"
 }
 
 cmd_review() {
@@ -922,7 +1029,10 @@ cmd_image() {
       *)         positional+=("$1"); shift ;;
     esac
   done
-  description="${positional[*]}"
+  # `:-`: bash 3.2 (macOS /bin/bash) treats "${positional[*]}" of an empty
+  # array as unbound under `set -u`, which aborted with "unbound variable"
+  # instead of the usage error below (upstream fix d3b981f).
+  description="${positional[*]:-}"
   if [ -z "$description" ]; then
     echo "error: image requires a description" >&2
     exit 64
@@ -1020,25 +1130,32 @@ Slash commands
 
 Model selection (--model)
 HELP
-  print_model_table 1
+  local agy_path models=""
+  if agy_path="$(find_agy)"; then
+    models="$(list_models "$agy_path" || true)"
+  fi
+  print_model_table 1 "$models"
   cat <<'HELP'
 
 How --model works
-  The plugin manages the "model" field in ~/.gemini/antigravity-cli/settings.json
-  for the duration of a single call: it takes a lock, swaps in your requested
-  model, invokes agy, and restores the original on exit (including SIGINT /
-  SIGTERM). If your TUI is open in parallel, its selected model will flip
-  for the duration of the call and revert when the call finishes.
+  Aliases resolve at call time against `agy models` to the newest model in
+  their family, so a new Gemini/Claude release is picked up without a plugin
+  update. Any id or display name that `agy models` lists is also accepted
+  verbatim. The result goes to agy's own --model flag for that call only;
+  settings.json is never touched, so a TUI open in parallel keeps its model.
+  Needs agy 1.2.0 or newer. Unknown names fail with exit 64.
 
-  Unknown aliases fail with exit 64 — typo safety beats forward-compat. If
-  Google ships a new model, update the plugin.
+Read-only commands
+  /agy:ask, /agy:review, /agy:scrape and /agy:doc-to-md run agy from a
+  throwaway temp dir, pinned to agy's Default agent mode for that run, with
+  no --dangerously-skip-permissions: agy can read, but writes outside its
+  temp workspace are denied. (agy 1.5.7+ otherwise starts headless runs in
+  Auto mode, which approves such writes.)
 
 Underlying CLI
-  Run `agy --help` for agy's own flags: --add-dir, -c/--continue,
-  --conversation, --dangerously-skip-permissions, -i/--prompt-interactive,
-  --log-file, -p/--print, --print-timeout, --sandbox.
-
-  Subcommands: changelog, help, install, plugin/plugins, update.
+  Run `agy --help` for agy's own flags (--model, --effort, --mode,
+  --settings, --output-format, --sandbox, --add-dir, --print-timeout, ...).
+  Subcommands include models, agents, changelog, mcp, plugin, update.
 HELP
 }
 
