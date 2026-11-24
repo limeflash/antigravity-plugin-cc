@@ -6,6 +6,25 @@ $ErrorActionPreference = 'Stop'
 
 function Fail([string]$m) { [Console]::Error.WriteLine("FAIL: $m"); exit 1 }
 
+# Run the launcher in a child Windows PowerShell 5.1. Under
+# ErrorActionPreference=Stop, PS 5.1 turns ANY stderr line of a native
+# program into a terminating NativeCommandError — and the launcher
+# legitimately reports "downloading ..." on stderr. So relax it for the call.
+function Invoke-Launcher([string[]]$launcherArgs, [switch]$MergeStderr) {
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    if ($MergeStderr) {
+      $o = & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher @launcherArgs 2>&1 | ForEach-Object { "$_" }
+    } else {
+      $o = & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher @launcherArgs 2>$null
+    }
+    return @{ Out = ($o -join "`n"); Code = $LASTEXITCODE }
+  } finally {
+    $ErrorActionPreference = $old
+  }
+}
+
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $work = Join-Path ([IO.Path]::GetTempPath()) ("agy-ps1-test-" + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path "$work\plugin\bin", "$work\release\v9.9.9" | Out-Null
@@ -25,26 +44,26 @@ try {
 
   # 1. download + verify + exec, with an argument containing quotes and spaces.
   $tricky = 'say "hi" to C:\path with spaces\'
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher ask $tricky 2>$null
-  if ($LASTEXITCODE -ne 0) { Fail "first run exit $LASTEXITCODE" }
-  if (-not ($out -match 'hello from stub')) { Fail "unexpected output: $out" }
+  $r = Invoke-Launcher @('ask', $tricky)
+  if ($r.Code -ne 0) { Fail "first run exit $($r.Code)" }
+  if (-not ($r.Out -match 'hello from stub')) { Fail "unexpected output: $($r.Out)" }
   $argv = ((Get-Content -Raw -LiteralPath "$work\record.txt").Split("`t")[1]).Split([char]0x1f)
   if ($argv[0] -ne 'ask' -or $argv[1] -ne $tricky) { Fail "argv mangled: $($argv -join ' | ')" }
   Write-Output 'ok 1 download + verify + exec, quotes preserved'
 
   # 2. tampered cache is not executed (re-downloaded instead).
   Set-Content -LiteralPath "$work\cache\9.9.9\$asset" -Value 'garbage'
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher version 2>$null | Out-Null
-  if ($LASTEXITCODE -ne 0) { Fail 're-download failed' }
+  $r = Invoke-Launcher @('version')
+  if ($r.Code -ne 0) { Fail 're-download failed' }
   if ((Get-FileHash -Algorithm SHA256 -LiteralPath "$work\cache\9.9.9\$asset").Hash.ToLowerInvariant() -ne $good) { Fail 'cache not repaired' }
   Write-Output 'ok 2 tampered cache refused'
 
   # 3. tampered release asset is refused.
   Remove-Item -Recurse -Force "$work\cache"
   Set-Content -LiteralPath "$work\release\v9.9.9\$asset" -Value 'evil'
-  $err = & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher x 2>&1
-  if ($LASTEXITCODE -eq 0) { Fail 'tampered asset accepted' }
-  if (-not ("$err" -match 'checksum mismatch')) { Fail "no mismatch message: $err" }
+  $r = Invoke-Launcher @('x') -MergeStderr
+  if ($r.Code -eq 0) { Fail 'tampered asset accepted' }
+  if (-not ($r.Out -match 'checksum mismatch')) { Fail "no mismatch message: $($r.Out)" }
   if (Test-Path -LiteralPath "$work\cache\9.9.9\$asset") { Fail 'tampered asset cached' }
   Write-Output 'ok 3 tampered asset refused'
   Write-Output 'launcher.ps1: all tests passed'
