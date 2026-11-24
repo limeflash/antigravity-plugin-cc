@@ -12,29 +12,25 @@ function Fail([string]$m) { [Console]::Error.WriteLine("FAIL: $m"); exit 1 }
 #   own native-argument boundary, which mangles embedded quotes and a
 #   trailing backslash before the launcher ever sees them — the test must
 #   exercise the launcher's quoting, not PowerShell's.
-# - Under ErrorActionPreference=Stop, PS 5.1 turns any stderr line of a
-#   native program into a terminating NativeCommandError, and the launcher
-#   legitimately reports "downloading ..." on stderr: relax it for the call.
-# - -OutputFormat Text: otherwise a child with redirected stderr may write
-#   its error records there as CLIXML, interleaved with the launcher's plain
-#   [Console]::Error lines, and the parent then fails to parse the mix
-#   ("Cannot process the XML from the 'Error' stream").
+# - Start-Process with stdout/stderr redirected to files, not `& powershell
+#   2>&1`: when one PowerShell runs another, the parent treats the child's
+#   stderr as serialized error records (CLIXML) and fails on the launcher's
+#   plain "checksum mismatch" lines ("Cannot process the XML from the
+#   'Error' stream"); PS 5.1 also turns stderr lines into terminating
+#   NativeCommandErrors under ErrorActionPreference=Stop. Files sidestep both.
 function Invoke-Launcher([string[]]$launcherArgs, [switch]$MergeStderr) {
   $quoted = @($launcherArgs | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
   $script = "& '" + ($launcher -replace "'", "''") + "' $quoted; exit `$LASTEXITCODE"
   $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
-  $old = $ErrorActionPreference
-  $ErrorActionPreference = 'Continue'
-  try {
-    if ($MergeStderr) {
-      $o = & powershell -NoProfile -NonInteractive -OutputFormat Text -ExecutionPolicy Bypass -EncodedCommand $enc 2>&1 | ForEach-Object { "$_" }
-    } else {
-      $o = & powershell -NoProfile -NonInteractive -OutputFormat Text -ExecutionPolicy Bypass -EncodedCommand $enc 2>$null
-    }
-    return @{ Out = ($o -join "`n"); Code = $LASTEXITCODE }
-  } finally {
-    $ErrorActionPreference = $old
-  }
+  $outFile = Join-Path $work ("out-" + [Guid]::NewGuid() + ".txt")
+  $errFile = Join-Path $work ("err-" + [Guid]::NewGuid() + ".txt")
+  $p = Start-Process -FilePath 'powershell' -Wait -PassThru -NoNewWindow `
+    -ArgumentList @('-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc) `
+    -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+  $o = Get-Content -Raw -LiteralPath $outFile
+  if ($MergeStderr) { $o = "$o`n" + (Get-Content -Raw -LiteralPath $errFile) }
+  Remove-Item -Force -LiteralPath $outFile, $errFile -ErrorAction SilentlyContinue
+  return @{ Out = "$o"; Code = $p.ExitCode }
 }
 
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
