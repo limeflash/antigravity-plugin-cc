@@ -6,18 +6,26 @@ $ErrorActionPreference = 'Stop'
 
 function Fail([string]$m) { [Console]::Error.WriteLine("FAIL: $m"); exit 1 }
 
-# Run the launcher in a child Windows PowerShell 5.1. Under
-# ErrorActionPreference=Stop, PS 5.1 turns ANY stderr line of a native
-# program into a terminating NativeCommandError — and the launcher
-# legitimately reports "downloading ..." on stderr. So relax it for the call.
+# Run the launcher in a child Windows PowerShell 5.1.
+# - Arguments go INSIDE the child's script (-EncodedCommand), as PowerShell
+#   string literals. Passing them on the command line would cross PS 5.1's
+#   own native-argument boundary, which mangles embedded quotes and a
+#   trailing backslash before the launcher ever sees them — the test must
+#   exercise the launcher's quoting, not PowerShell's.
+# - Under ErrorActionPreference=Stop, PS 5.1 turns any stderr line of a
+#   native program into a terminating NativeCommandError, and the launcher
+#   legitimately reports "downloading ..." on stderr: relax it for the call.
 function Invoke-Launcher([string[]]$launcherArgs, [switch]$MergeStderr) {
+  $quoted = @($launcherArgs | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
+  $script = "& '" + ($launcher -replace "'", "''") + "' $quoted; exit `$LASTEXITCODE"
+  $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
   $old = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try {
     if ($MergeStderr) {
-      $o = & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher @launcherArgs 2>&1 | ForEach-Object { "$_" }
+      $o = & powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc 2>&1 | ForEach-Object { "$_" }
     } else {
-      $o = & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher @launcherArgs 2>$null
+      $o = & powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc 2>$null
     }
     return @{ Out = ($o -join "`n"); Code = $LASTEXITCODE }
   } finally {
