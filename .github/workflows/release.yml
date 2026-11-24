@@ -1,0 +1,117 @@
+name: Release
+
+# Builds agy-plugin for every supported platform when a v* tag is pushed,
+# publishes the binaries + SHA256SUMS as a GitHub Release, then opens a PR
+# that pins plugins/agy/bin/{VERSION,SHA256SUMS} to them. Users get the new
+# binary only once that PR is merged: the launcher refuses any binary whose
+# hash is not committed in the repo.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Toolchain + target
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+      - name: Tag matches Cargo.toml version
+        shell: bash
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != Cargo.toml v$v"; exit 1; }
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          ext=""; case "${{ matrix.target }}" in *windows*) ext=.exe ;; esac
+          cp "target/${{ matrix.target }}/release/agy-plugin$ext" "dist/agy-plugin-${{ matrix.target }}$ext"
+          # Smoke test where the runner can execute it natively.
+          "dist/agy-plugin-${{ matrix.target }}$ext" version || [ "${{ matrix.target }}" = x86_64-apple-darwin ]
+      - uses: actions/upload-artifact@v7
+        with:
+          name: agy-plugin-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum agy-plugin-* | tee SHA256SUMS
+      - name: Release notes from CHANGELOG
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {if (p) exit} p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Release $GITHUB_REF_NAME" > notes.md
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+      - uses: actions/upload-artifact@v7
+        with:
+          name: SHA256SUMS
+          path: dist/SHA256SUMS
+
+  pin:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: actions/download-artifact@v8
+        with:
+          name: SHA256SUMS
+          path: sums
+      - name: Open the pin PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          branch="release/pin-$GITHUB_REF_NAME"
+          git switch -c "$branch"
+          printf '%s\n' "$v" > plugins/agy/bin/VERSION
+          cp sums/SHA256SUMS plugins/agy/bin/SHA256SUMS
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add plugins/agy/bin/VERSION plugins/agy/bin/SHA256SUMS
+          git commit -m "release: pin agy-plugin binaries to $GITHUB_REF_NAME"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "release: pin agy-plugin binaries to $GITHUB_REF_NAME" \
+            --body "Points the launcher at the $GITHUB_REF_NAME release binaries. Checksums come from the release workflow run; compare them with the release's SHA256SUMS asset before merging."

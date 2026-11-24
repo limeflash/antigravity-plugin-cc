@@ -12,23 +12,4 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
-
-  # Node deps are added in Phase 2 (job-control companion). The
-  # ecosystem entry below is harmless until package.json appears.
-  - package-ecosystem: "npm"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "javascript"
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-    versioning-strategy: "increase"
-    ignore:
-      # vitest and bats-core have rapid major bumps; pin to minor.
-      - dependency-name: "vitest"
-        update-types: ["version-update:semver-major"]
+# No cargo entry: the crate has no dependencies by policy (CONTRIBUTING.md).
