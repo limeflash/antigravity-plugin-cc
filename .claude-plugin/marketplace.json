@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "The Antigravity CLI (`agy`) plugin for Claude Code — ask, code review, adversarial review, delegate, rescue, web scrape and doc→Markdown from inside your editor. Read-only commands really are read-only (agy pinned to Default mode, outside your repo) + secret / SSRF / path guards, background job control. One std-only Rust binary, SHA-256 pinned; macOS / Linux / Windows.",
-    "version": "0.9.0"
+    "version": "0.9.1"
   },
   "plugins": [
     {
       "name": "agy",
       "description": "Use the Google Antigravity CLI (`agy`) from Claude Code: /agy:ask, /agy:review, /agy:adversarial-review, /agy:scrape, /agy:doc-to-md (read-only: agy pinned to Default mode, outside your repo), /agy:rescue and /agy:image (write-capable, with rails), /agy:status, /agy:result, /agy:cancel, /agy:delegate, /agy:research, /agy:setup, /agy:help. Secret-scan + SSRF/path guards; per-call --model resolved against `agy models`. One std-only Rust binary, SHA-256 pinned.",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "author": {
         "name": "limeflash",
         "url": "https://github.com/limeflash"

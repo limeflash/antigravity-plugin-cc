@@ -35,8 +35,9 @@ Only `--print-timeout <duration>` and `--effort <level>` may follow the
 prompt argument; any other agy flag is refused (exit 64) because `ask` is
 read-only.
 
-`<alias>`: `flash-low`, `flash-medium`, `flash`, `pro-low`, `pro`, `sonnet`,
-`opus`, `gpt-oss`. Aliases resolve to the newest model of that family that
+`<alias>`: `gemini` (newest Gemini of any kind), any Gemini kind
+`agy models` lists (`hydrogen`, `flash`, `pro`, …) with an optional level
+(`hydrogen-xhigh`, `flash-low`), `opus`, `sonnet`, `gpt-oss`. Aliases resolve to the newest model of that family that
 `agy models` lists; any id or display name from `agy models` is also
 accepted. Unknown names fail with exit 64. Run `/agy:help` for the table.
 

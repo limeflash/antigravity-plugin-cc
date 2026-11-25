@@ -41,9 +41,10 @@ bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" ask [--model <alias>] '<prompt>' [--
   ```
   bash "${CLAUDE_PLUGIN_ROOT}/bin/agy-plugin" ask --model opus 'why does the pagination test flake?'
   ```
-  Aliases (`flash-low`, `flash-medium`, `flash`, `pro-low`, `pro`, `sonnet`,
-  `opus`, `gpt-oss`) resolve to the newest model of that family that
-  `agy models` lists; any id or display name from `agy models` is also
+  Aliases resolve to the newest model of that family that `agy models`
+  lists: `gemini` (newest Gemini of any kind), any Gemini kind it lists
+  (`hydrogen`, `flash`, `pro`, …) with an optional level (`hydrogen-xhigh`,
+  `flash-low`), `opus`, `sonnet`, `gpt-oss`; any id or display name from `agy models` is also
   accepted. Unknown names fail with exit 64.
 - If no `--model` was given, omit it; agy uses its current model.
 - After the prompt, only `--print-timeout` and `--effort` are allowed; any

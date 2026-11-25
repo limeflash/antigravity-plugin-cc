@@ -12,6 +12,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > since been substantially rewritten and extended. The earlier entries below
 > are the original upstream history, preserved for traceability.
 
+## [0.9.1] - 2026-11-25 (limeflash)
+
+Gemini 4 model aliases, and a rebuild from `main` so the released binaries
+match the source again (0.9.0's binaries were built just before the Linux
+fix below landed).
+
+### Added
+- **Gemini 4 and any future Gemini code name as `--model` aliases.** agy now
+  lists Gemini 4 Hydrogen (XHigh / High / Medium / Low), which no alias
+  reached. Gemini aliases are no longer a fixed list: every kind that
+  `agy models` lists (`hydrogen`, `flash`, `pro`, and the next code name) is
+  an alias, with an optional level suffix (`hydrogen-xhigh`, `flash-low`).
+  `gemini` (`gemini-xhigh`, …) is the newest Gemini of any kind; on a version
+  tie a big model beats Flash. `/agy:help` shows each kind with its levels.
+
+### Changed
+- The empty-`--model` error suggests `--model gemini` instead of `pro`,
+  which current agy accounts don't list.
+
+### Fixed
+- Linux: `/agy:cancel` treated an exited-but-not-yet-reaped worker (a
+  zombie) as alive and waited out its full grace period before giving up;
+  a zombie now counts as gone.
+- Windows: two updates of the same job record at once (a background
+  worker finishing while `/agy:cancel` runs) could fail with "could not
+  lock the job record: Access is denied". Job records are now guarded by
+  an OS file lock instead of a create-and-delete lock file.
+
+### Tests
+- Windows CI: path, file-name and PowerShell 5.1 quirks in the test
+  harnesses (no change to the plugin's behaviour on Windows).
+
 ## [0.9.0] - 2026-11-24 (limeflash)
 
 **Rewritten in Rust, and a read-only escape on agy 1.5.7+ closed.** One

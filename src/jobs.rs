@@ -90,12 +90,29 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
         f.write_all(data)?;
         f.sync_all()?;
         drop(f);
-        std::fs::rename(&tmp, path)
+        rename_retrying(&tmp, path)
     })();
     if res.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     res
+}
+
+/// `rename`, retried briefly on Windows: replacing a file fails there while
+/// anything (a concurrent reader, an antivirus scan of the fresh temp file)
+/// has it open for a moment.
+fn rename_retrying(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if cfg!(windows) && tries < 50 && from.exists() => {
+                let _ = e;
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            r => return r,
+        }
+    }
 }
 
 fn write_record(root: &Path, id: &str, rec: &Value) -> Result<(), Fail> {
@@ -130,30 +147,48 @@ pub(crate) fn read_job(root: &Path, id: &str) -> Result<Option<Value>, Fail> {
         .map_err(|e| Fail::runtime(format!("error: job {id} is unreadable: {e}")))
 }
 
-/// Run `f` while holding `runtime/<id>.lock` (create-exclusive). A lock
-/// older than 30 s is from a crashed process and is broken.
+/// Run `f` while holding an exclusive OS lock on `runtime/<id>.lock`. The
+/// OS drops the lock when its holder exits, so a crashed process can't leave
+/// a job locked; the file itself stays (deleting a lock file that another
+/// process is opening races on Windows).
 fn with_lock<T>(root: &Path, id: &str, f: impl FnOnce() -> Result<T, Fail>) -> Result<T, Fail> {
     let lp = lock_path(root, id);
     if let Some(d) = lp.parent() {
         std::fs::create_dir_all(d).map_err(|e| io_fail("could not create the job state dir", e))?;
     }
+    if std::fs::symlink_metadata(&lp).is_ok_and(|m| !m.is_file()) {
+        return Err(Fail::runtime(format!(
+            "error: refusing to use {}: not a regular file",
+            lp.display()
+        )));
+    }
+    let mut o = OpenOptions::new();
+    o.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
     let start = Instant::now();
-    loop {
-        match OpenOptions::new().write(true).create_new(true).open(&lp) {
-            Ok(mut file) => {
-                let _ = write!(file, "{}", std::process::id());
-                break;
+    let file = loop {
+        match o.open(&lp) {
+            Ok(file) => break file,
+            // Windows: a 0.9.0 process deleting its lock file leaves it
+            // "delete pending" for a moment, which reads as access denied.
+            Err(e)
+                if cfg!(windows)
+                    && e.kind() == std::io::ErrorKind::PermissionDenied
+                    && start.elapsed() < Duration::from_secs(2) =>
+            {
+                std::thread::sleep(Duration::from_millis(15));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let stale = std::fs::metadata(&lp)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.elapsed().ok())
-                    .is_some_and(|age| age > Duration::from_secs(30));
-                if stale {
-                    let _ = std::fs::remove_file(&lp);
-                    continue;
-                }
+            Err(e) => return Err(io_fail("could not lock the job record", e)),
+        }
+    };
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) => {
                 if start.elapsed() > Duration::from_secs(10) {
                     return Err(Fail::runtime(format!(
                         "error: job {id} is locked by another process"
@@ -161,11 +196,13 @@ fn with_lock<T>(root: &Path, id: &str, f: impl FnOnce() -> Result<T, Fail>) -> R
                 }
                 std::thread::sleep(Duration::from_millis(15));
             }
-            Err(e) => return Err(io_fail("could not lock the job record", e)),
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(io_fail("could not lock the job record", e));
+            }
         }
     }
     let res = f();
-    let _ = std::fs::remove_file(&lp);
+    let _ = file.unlock();
     res
 }
 
