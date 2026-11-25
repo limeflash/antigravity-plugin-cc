@@ -24,13 +24,22 @@ function Invoke-Launcher([string[]]$launcherArgs, [switch]$MergeStderr) {
   $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
   $outFile = Join-Path $work ("out-" + [Guid]::NewGuid() + ".txt")
   $errFile = Join-Path $work ("err-" + [Guid]::NewGuid() + ".txt")
-  $p = Start-Process -FilePath 'powershell' -Wait -PassThru -NoNewWindow `
-    -ArgumentList @('-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc) `
-    -RedirectStandardOutput $outFile -RedirectStandardError $errFile
-  $o = Get-Content -Raw -LiteralPath $outFile
-  if ($MergeStderr) { $o = "$o`n" + (Get-Content -Raw -LiteralPath $errFile) }
+  # Started from pwsh 7, Windows PowerShell inherits pwsh's PSModulePath and
+  # loads pwsh's modules (Get-FileHash & co. then fail); let it use its own.
+  $savedModulePath = $env:PSModulePath
+  $env:PSModulePath = $null
+  try {
+    $p = Start-Process -FilePath 'powershell' -Wait -PassThru -NoNewWindow `
+      -ArgumentList @('-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc) `
+      -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+  } finally {
+    $env:PSModulePath = $savedModulePath
+  }
+  $o = "$(Get-Content -Raw -LiteralPath $outFile)"
+  $e = "$(Get-Content -Raw -LiteralPath $errFile)"
+  if ($MergeStderr) { $o = "$o`n$e" }
   Remove-Item -Force -LiteralPath $outFile, $errFile -ErrorAction SilentlyContinue
-  return @{ Out = "$o"; Code = $p.ExitCode }
+  return @{ Out = $o; Err = $e; Code = $p.ExitCode }
 }
 
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -53,7 +62,7 @@ try {
   # 1. download + verify + exec, with an argument containing quotes and spaces.
   $tricky = 'say "hi" to C:\path with spaces\'
   $r = Invoke-Launcher @('ask', $tricky)
-  if ($r.Code -ne 0) { Fail "first run exit $($r.Code)" }
+  if ($r.Code -ne 0) { Fail "first run exit $($r.Code): $($r.Err)" }
   if (-not ($r.Out -match 'hello from stub')) { Fail "unexpected output: $($r.Out)" }
   $argv = ((Get-Content -Raw -LiteralPath "$work\record.txt").Split("`t")[1]).Split([char]0x1f)
   if ($argv[0] -ne 'ask' -or $argv[1] -ne $tricky) { Fail "argv mangled: $($argv -join ' | ')" }
@@ -62,7 +71,7 @@ try {
   # 2. tampered cache is not executed (re-downloaded instead).
   Set-Content -LiteralPath "$work\cache\9.9.9\$asset" -Value 'garbage'
   $r = Invoke-Launcher @('version')
-  if ($r.Code -ne 0) { Fail 're-download failed' }
+  if ($r.Code -ne 0) { Fail "re-download failed: $($r.Err)" }
   if ((Get-FileHash -Algorithm SHA256 -LiteralPath "$work\cache\9.9.9\$asset").Hash.ToLowerInvariant() -ne $good) { Fail 'cache not repaired' }
   Write-Output 'ok 2 tampered cache refused'
 
